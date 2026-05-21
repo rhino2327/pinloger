@@ -1,0 +1,32 @@
+name: 🚀 Deploy Web to Firebase Hosting
+
+on:
+  push:
+    branches:
+      - main   # main 브랜치에 push 될 때마다 자동 배포
+      - master # 혹시 master 브랜치 사용하는 경우 대비
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🏗️ Export Expo web build
+        run: npx expo export -p web
+
+      - name: 🔥 Deploy to Firebase Hosting
+        run: npx firebase deploy --only hosting --project travel-app-a2ee5
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}

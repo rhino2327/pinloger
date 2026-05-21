@@ -39,3 +39,13 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Firebase
+.firebase/
+
+# Claude Code
+.claude/
+
+# Google Services (sensitive)
+google-services.json
+GoogleService-Info.plist
