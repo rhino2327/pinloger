@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, Switch
+  View, Text, FlatList, TouchableOpacity, StyleSheet, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
+import {
+  collection, query, where, onSnapshot, updateDoc, doc,
+} from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
-import { generateInviteCode } from '../utils/helpers';
 
 export default function CommunityScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const [publicTrips, setPublicTrips] = useState([]);   // 남들 여행
-  const [mySharedTrips, setMySharedTrips] = useState([]); // 내가 공유 중인 여행
+  const [publicTrips, setPublicTrips] = useState([]);
+  const [mySharedTrips, setMySharedTrips] = useState([]);
   const user = auth.currentUser;
 
-  // 남들 공개 여행
   useEffect(() => {
     const q = query(collection(db, 'trips'), where('isPublic', '==', true));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -24,54 +24,32 @@ export default function CommunityScreen({ navigation }) {
     return unsubscribe;
   }, []);
 
-  const toggleMyTrip = async (trip) => {
-    try {
-      await updateDoc(doc(db, 'trips', trip.id), { isPublic: !trip.isPublic });
-    } catch (e) {
-      Alert.alert('오류', '공유 설정 변경에 실패했어요. 다시 시도해주세요.');
-    }
-  };
-
-  const copyTrip = async (trip) => {
+  const stopSharing = async (trip) => {
     Alert.alert(
-      '여행 복사',
-      `"${trip.name}" 일정을 내 여행으로 복사할까요?`,
+      '공유 중단',
+      `"${trip.name}" 여행의 커뮤니티 공개를 중단할까요?`,
       [
         { text: '취소', style: 'cancel' },
         {
-          text: '복사',
+          text: '중단', style: 'destructive',
           onPress: async () => {
             try {
-              const code = generateInviteCode();
-              await addDoc(collection(db, 'trips'), {
-                name: `${trip.name} (복사본)`,
-                destination: trip.destination,
-                ownerId: user.uid,
-                members: [user.uid],
-                memberRoles: { [user.uid]: 'owner' },
-                inviteCode: code,
-                isPublic: false,
-                createdAt: serverTimestamp(),
-              });
-              Alert.alert('완료', '내 여행 목록에 추가되었습니다!');
-            } catch (e) {
-              Alert.alert('오류', '여행 복사에 실패했어요. 다시 시도해주세요.');
+              await updateDoc(doc(db, 'trips', trip.id), { isPublic: false });
+            } catch {
+              Alert.alert('오류', '공유 설정 변경에 실패했어요. 다시 시도해주세요.');
             }
-          }
-        }
+          },
+        },
       ]
     );
   };
 
-  // FlatList 데이터 구성 (헤더 포함)
   const listData = [
-    // ── 내가 공유 중인 여행 섹션 ──
     { type: 'myHeader' },
     ...(mySharedTrips.length > 0
       ? mySharedTrips.map(t => ({ type: 'myTrip', ...t }))
       : [{ type: 'myEmpty' }]
     ),
-    // ── 다른 사람 여행 섹션 ──
     { type: 'otherHeader' },
     ...(publicTrips.length > 0
       ? publicTrips.map(t => ({ type: 'otherTrip', ...t }))
@@ -84,7 +62,7 @@ export default function CommunityScreen({ navigation }) {
       return (
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>📤 내가 공유 중인 여행</Text>
-          <Text style={styles.sectionHint}>내 여행 탭 → 멤버에서 공개 설정 가능</Text>
+          <Text style={styles.sectionHint}>다녀온 여행만 커뮤니티에 공유할 수 있어요</Text>
         </View>
       );
     }
@@ -93,7 +71,7 @@ export default function CommunityScreen({ navigation }) {
         <View style={styles.myEmptyBox}>
           <Text style={styles.myEmptyText}>공유 중인 여행이 없어요</Text>
           <Text style={styles.myEmptyHint}>
-            내 여행의 멤버 탭에서{'\n'}"커뮤니티 공개"를 켜보세요
+            다녀온 여행의 멤버 탭에서{'\n'}"커뮤니티 공개"를 켜보세요
           </Text>
         </View>
       );
@@ -109,20 +87,13 @@ export default function CommunityScreen({ navigation }) {
               {item.startDate ? (
                 <Text style={styles.myTripDate}>🗓 {item.startDate} ~ {item.endDate}</Text>
               ) : null}
-              <Text style={styles.myTripSharing}>🌐 커뮤니티 공유 중</Text>
+              <View style={styles.myTripMetaRow}>
+                <Text style={styles.myTripSharing}>🌐 공유 중</Text>
+                <Text style={styles.myTripLikes}>❤️ {item.likedBy?.length || 0}</Text>
+              </View>
             </View>
           </View>
-          <TouchableOpacity
-            style={styles.stopShareBtn}
-            onPress={() => Alert.alert(
-              '공유 중단',
-              `"${item.name}" 여행의 커뮤니티 공개를 중단할까요?`,
-              [
-                { text: '취소', style: 'cancel' },
-                { text: '중단', style: 'destructive', onPress: () => toggleMyTrip(item) },
-              ]
-            )}
-          >
+          <TouchableOpacity style={styles.stopShareBtn} onPress={() => stopSharing(item)}>
             <Text style={styles.stopShareText}>공유 중단</Text>
           </TouchableOpacity>
         </View>
@@ -132,7 +103,7 @@ export default function CommunityScreen({ navigation }) {
       return (
         <View style={[styles.sectionHeader, { marginTop: 8 }]}>
           <Text style={styles.sectionTitle}>🌍 다른 사람의 여행</Text>
-          <Text style={styles.sectionHint}>마음에 드는 일정을 내 여행으로 복사해보세요</Text>
+          <Text style={styles.sectionHint}>일정을 눌러 상세 내용을 확인하고 복사해보세요</Text>
         </View>
       );
     }
@@ -146,9 +117,14 @@ export default function CommunityScreen({ navigation }) {
         </View>
       );
     }
-    // otherTrip
+    // otherTrip — 클릭 시 상세 화면으로 이동
+    const likeCount = item.likedBy?.length || 0;
     return (
-      <View style={styles.tripCard}>
+      <TouchableOpacity
+        style={styles.tripCard}
+        onPress={() => navigation.navigate('CommunityTripDetail', { trip: item })}
+        activeOpacity={0.75}
+      >
         <View style={styles.cardTop}>
           <Text style={styles.tripFlag}>{item.flag || '🌍'}</Text>
           <View style={styles.cardInfo}>
@@ -157,13 +133,16 @@ export default function CommunityScreen({ navigation }) {
             {item.startDate ? (
               <Text style={styles.tripDate}>🗓 {item.startDate} ~ {item.endDate}</Text>
             ) : null}
-            <Text style={styles.tripMembers}>👥 {item.members?.length || 1}명</Text>
+            <View style={styles.cardMeta}>
+              <Text style={styles.tripMembers}>👥 {item.members?.length || 1}명</Text>
+              {likeCount > 0 && (
+                <Text style={styles.tripLikes}>❤️ {likeCount}</Text>
+              )}
+            </View>
           </View>
-          <TouchableOpacity style={styles.copyBtn} onPress={() => copyTrip(item)}>
-            <Text style={styles.copyBtnText}>복사</Text>
-          </TouchableOpacity>
+          <Text style={styles.chevron}>›</Text>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -171,7 +150,7 @@ export default function CommunityScreen({ navigation }) {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <Text style={styles.headerTitle}>커뮤니티</Text>
-        <Text style={styles.headerSubtitle}>여행 일정을 공유하고 참고해보세요</Text>
+        <Text style={styles.headerSubtitle}>다른 사람의 여행 일정을 구경하고 복사해보세요</Text>
       </View>
 
       <FlatList
@@ -206,8 +185,10 @@ const styles = StyleSheet.create({
   myTripInfo: { flex: 1 },
   myTripName: { color: '#fff', fontSize: 15, fontWeight: 'bold', marginBottom: 2 },
   myTripDest: { color: '#aaa', fontSize: 12, marginBottom: 2 },
-  myTripDate: { color: '#4a9eff', fontSize: 11, marginBottom: 3 },
+  myTripDate: { color: '#4a9eff', fontSize: 11, marginBottom: 4 },
+  myTripMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   myTripSharing: { color: '#4aff91', fontSize: 11 },
+  myTripLikes: { color: '#e94560', fontSize: 11 },
   stopShareBtn: {
     backgroundColor: 'rgba(233,69,96,0.15)', borderRadius: 12,
     paddingHorizontal: 10, paddingVertical: 6,
@@ -233,13 +214,11 @@ const styles = StyleSheet.create({
   cardInfo: { flex: 1 },
   tripName: { color: '#fff', fontSize: 15, fontWeight: 'bold', marginBottom: 3 },
   tripDestination: { color: '#aaa', fontSize: 13, marginBottom: 3 },
-  tripDate: { color: '#4a9eff', fontSize: 11, marginBottom: 3 },
+  tripDate: { color: '#4a9eff', fontSize: 11, marginBottom: 4 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   tripMembers: { color: '#888', fontSize: 12 },
-  copyBtn: {
-    backgroundColor: '#e94560', paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 20, marginLeft: 10,
-  },
-  copyBtnText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  tripLikes: { color: '#e94560', fontSize: 12 },
+  chevron: { color: '#aaa', fontSize: 24, marginLeft: 8 },
 
   emptyContainer: { alignItems: 'center', marginTop: 30 },
   emptyText: { color: '#aaa', fontSize: 15, marginBottom: 8 },

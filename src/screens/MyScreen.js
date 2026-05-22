@@ -116,7 +116,13 @@ export default function MyScreen({ navigation }) {
             </View>
           );
         }
-        if (item.type === 'header') return <Text style={styles.sectionHeader}>{item.title}</Text>;
+        if (item.type === 'header') return (
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionHeaderLine} />
+            <Text style={styles.sectionHeader}>{item.title}</Text>
+            <View style={styles.sectionHeaderLine} />
+          </View>
+        );
         if (item.type === 'empty') return (
           <Text style={styles.emptyText}>아직 여행이 없어요.{'\n'}내 여행 탭에서 만들어보세요! ✈️</Text>
         );
@@ -147,7 +153,12 @@ const styles = StyleSheet.create({
   },
   statNum: { color: '#e94560', fontSize: 24, fontWeight: 'bold' },
   statLabel: { color: '#aaa', fontSize: 12, marginTop: 2 },
-  sectionHeader: { color: '#aaa', fontSize: 13, fontWeight: 'bold', marginTop: 4, marginBottom: 10 },
+  sectionHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginTop: 8, marginBottom: 12,
+  },
+  sectionHeaderLine: { flex: 1, height: 1, backgroundColor: '#0f3460' },
+  sectionHeader: { color: '#aaa', fontSize: 12, fontWeight: 'bold', flexShrink: 0 },
   tripCard: {
     backgroundColor: '#16213e', borderRadius: 14, padding: 16,
     marginBottom: 12, flexDirection: 'row', alignItems: 'center',

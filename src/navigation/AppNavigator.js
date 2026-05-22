@@ -12,6 +12,7 @@ import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import HomeScreen from '../screens/HomeScreen';
 import TripDetailScreen from '../screens/TripDetailScreen';
 import CommunityScreen from '../screens/CommunityScreen';
+import CommunityTripDetailScreen from '../screens/CommunityTripDetailScreen';
 import ExchangeScreen from '../screens/ExchangeScreen';
 import MyScreen from '../screens/MyScreen';
 import ProfileScreen from '../screens/ProfileScreen';
@@ -87,6 +88,11 @@ function AppStack() {
         name="TripDetail"
         component={TripDetailScreen}
         options={({ route }) => ({ title: route.params?.trip?.name || '여행 상세' })}
+      />
+      <Stack.Screen
+        name="CommunityTripDetail"
+        component={CommunityTripDetailScreen}
+        options={({ route }) => ({ title: route.params?.trip?.name || '여행 일정' })}
       />
       <Stack.Screen
         name="Profile"

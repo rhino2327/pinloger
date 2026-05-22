@@ -103,12 +103,24 @@ export default function MembersScreen({ route }) {
       {isOwner && (
         <TouchableOpacity
           style={styles.publicToggle}
-          onPress={() => updateDoc(doc(db, 'trips', trip.id), { isPublic: !tripData.isPublic })}
+          onPress={() => {
+            const today = new Date().toISOString().slice(0, 10);
+            if (!tripData.isPublic && (!tripData.endDate || tripData.endDate >= today)) {
+              Alert.alert(
+                '공유 불가',
+                '다녀온 여행만 커뮤니티에 공유할 수 있어요.\n여행이 끝난 후 공유해주세요.'
+              );
+              return;
+            }
+            updateDoc(doc(db, 'trips', trip.id), { isPublic: !tripData.isPublic });
+          }}
         >
-          <Text style={styles.publicToggleText}>
-            커뮤니티 공개: {tripData.isPublic ? '🟢 공개' : '🔴 비공개'}
-          </Text>
-          <Text style={styles.publicToggleHint}>탭하여 변경</Text>
+          <View>
+            <Text style={styles.publicToggleText}>
+              커뮤니티 공개: {tripData.isPublic ? '🟢 공개' : '🔴 비공개'}
+            </Text>
+            <Text style={styles.publicToggleHint}>다녀온 여행만 공유 가능 · 탭하여 변경</Text>
+          </View>
         </TouchableOpacity>
       )}
 
