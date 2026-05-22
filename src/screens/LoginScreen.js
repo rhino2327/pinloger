@@ -14,7 +14,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import * as AuthSession from 'expo-auth-session';
 import { auth, functions } from '../config/firebase';
-import { GOOGLE_WEB_CLIENT_ID, EXPO_USERNAME } from '../config/socialAuth';
+import { GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID, EXPO_USERNAME } from '../config/socialAuth';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -86,8 +86,10 @@ export default function LoginScreen({ navigation }) {
   const redirectUri = `https://auth.expo.io/@${EXPO_USERNAME}/TravelApp`;
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: GOOGLE_WEB_CLIENT_ID,      // Expo Go 범용 fallback
+    clientId: GOOGLE_WEB_CLIENT_ID,           // Expo Go fallback
     webClientId: GOOGLE_WEB_CLIENT_ID,
+    iosClientId: GOOGLE_IOS_CLIENT_ID,        // iOS 네이티브 빌드용
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,  // Android 네이티브 빌드용
     redirectUri,
   });
 
