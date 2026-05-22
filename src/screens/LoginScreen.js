@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   signInWithEmailAndPassword, createUserWithEmailAndPassword,
   GoogleAuthProvider, signInWithCredential, signInWithCustomToken,
+  signInWithPopup,
 } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import * as WebBrowser from 'expo-web-browser';
@@ -195,7 +196,31 @@ export default function LoginScreen({ navigation }) {
   };
 
   const isGoogleEnabled = GOOGLE_WEB_CLIENT_ID !== 'YOUR_GOOGLE_WEB_CLIENT_ID';
-  const isKakaoEnabled = true; // API 키는 Cloud Function 서버에서 관리
+  const isKakaoEnabled = Platform.OS !== 'web'; // 카카오는 네이티브 전용
+
+  // 웹: Firebase signInWithPopup / 네이티브: expo-auth-session
+  const handleGoogleLogin = async () => {
+    clearErrors();
+    if (Platform.OS === 'web') {
+      setLoading(true);
+      try {
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+          setErrorMsg('Google 로그인에 실패했어요. 잠시 후 다시 시도해주세요.');
+        }
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      if (isGoogleEnabled) {
+        promptAsync();
+      } else {
+        setErrorMsg('Google 클라이언트 ID를 설정해주세요.');
+      }
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -282,30 +307,25 @@ export default function LoginScreen({ navigation }) {
 
         {/* Google 로그인 */}
         <TouchableOpacity
-          style={[styles.socialBtn, !isGoogleEnabled && styles.socialBtnDisabled]}
-          onPress={() => {
-            clearErrors();
-            if (isGoogleEnabled) {
-              promptAsync();
-            } else {
-              setErrorMsg('Google 클라이언트 ID를 설정해주세요.');
-            }
-          }}
-          disabled={!request}
+          style={[styles.socialBtn, loading && styles.socialBtnDisabled]}
+          onPress={handleGoogleLogin}
+          disabled={loading || (Platform.OS !== 'web' && !request)}
         >
           <GoogleLogo />
           <Text style={styles.socialBtnText}>Google로 계속하기</Text>
         </TouchableOpacity>
 
-        {/* 카카오 로그인 */}
-        <TouchableOpacity
-          style={[styles.kakaoBtn, (!isKakaoEnabled || loading) && styles.socialBtnDisabled]}
-          onPress={handleKakaoLogin}
-          disabled={!isKakaoEnabled || loading}
-        >
-          <KakaoLogo />
-          <Text style={styles.kakaoBtnText}>카카오로 계속하기</Text>
-        </TouchableOpacity>
+        {/* 카카오 로그인 — 네이티브 전용 */}
+        {Platform.OS !== 'web' && (
+          <TouchableOpacity
+            style={[styles.kakaoBtn, loading && styles.socialBtnDisabled]}
+            onPress={handleKakaoLogin}
+            disabled={loading}
+          >
+            <KakaoLogo />
+            <Text style={styles.kakaoBtnText}>카카오로 계속하기</Text>
+          </TouchableOpacity>
+        )}
 
       </ScrollView>
       </KeyboardAvoidingView>
