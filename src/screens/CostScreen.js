@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   Modal, TextInput, Alert, ScrollView,
-  KeyboardAvoidingView, Platform, Animated,
+  KeyboardAvoidingView, Platform, Animated, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -113,6 +113,7 @@ export default function CostScreen({ route }) {
   const [cashAmount,         setCashAmount]         = useState('');
   const [cashRate,           setCashRate]           = useState('');
   const [cashMemo,           setCashMemo]           = useState('');
+  const [rateLoading,        setRateLoading]        = useState(false);
 
   const user    = auth.currentUser;
   const canEdit = ['owner', 'editor'].includes(trip.memberRoles?.[user.uid]);
@@ -145,6 +146,36 @@ export default function CostScreen({ route }) {
       const data = await res.json();
       setExchangeRates(data.rates);
     } catch {}
+  };
+
+  // 현재 환율 버튼 — 1 {cashCurrency} = ? KRW 계산
+  const fetchCurrentRate = async () => {
+    setRateLoading(true);
+    try {
+      let rates = exchangeRates;
+      // 환율 캐시가 없으면 새로 가져오기
+      if (!rates || Object.keys(rates).length === 0) {
+        const res  = await fetch('https://api.exchangerate-api.com/v4/latest/KRW');
+        const data = await res.json();
+        rates = data.rates;
+        setExchangeRates(rates);
+      }
+      if (rates[cashCurrency] && rates[cashCurrency] > 0) {
+        // rates[cashCurrency] = 1 KRW 기준 외화 → 역수 = 1 외화 기준 KRW
+        const krwPerUnit = 1 / rates[cashCurrency];
+        // 100원 이상(USD 등): 정수, 미만(JPY 등): 소수점 1자리
+        const rounded = krwPerUnit >= 100
+          ? Math.round(krwPerUnit)
+          : Math.round(krwPerUnit * 10) / 10;
+        setCashRate(String(rounded));
+      } else {
+        Alert.alert('알림', `${cashCurrency} 환율 정보를 찾을 수 없어요.`);
+      }
+    } catch {
+      Alert.alert('알림', '환율을 불러오지 못했어요.\n인터넷 연결을 확인해주세요.');
+    } finally {
+      setRateLoading(false);
+    }
   };
 
   const toKRW = (amt, cur) => {
@@ -662,14 +693,29 @@ export default function CostScreen({ route }) {
                 />
 
                 {/* 적용 환율 */}
-                <TextInput
-                  style={styles.input}
-                  placeholder={`적용 환율 (1 ${cashCurrency} = ? 원) *`}
-                  placeholderTextColor="#aaa"
-                  value={cashRate}
-                  onChangeText={setCashRate}
-                  keyboardType="numeric"
-                />
+                <View style={styles.rateRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    placeholder={`1 ${cashCurrency} = ? 원`}
+                    placeholderTextColor="#aaa"
+                    value={cashRate}
+                    onChangeText={setCashRate}
+                    keyboardType="numeric"
+                  />
+                  <TouchableOpacity
+                    style={styles.rateFetchBtn}
+                    onPress={fetchCurrentRate}
+                    disabled={rateLoading}
+                  >
+                    {rateLoading
+                      ? <ActivityIndicator size="small" color="#fff" />
+                      : <Text style={styles.rateFetchBtnText}>🔄 현재 환율</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.rateHint}>
+                  현재 환율 버튼을 누르면 실시간 환율이 자동 입력돼요
+                </Text>
 
                 {/* 원화 환산 미리보기 */}
                 {cashKRWPreview() && (
@@ -816,6 +862,17 @@ const styles = StyleSheet.create({
   chipText:      { color: '#aaa', fontSize: 13 },
   chipTextActive:{ color: '#fff' },
   categoryRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+
+  rateRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6,
+  },
+  rateFetchBtn: {
+    backgroundColor: '#0f3460', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 14,
+    alignItems: 'center', justifyContent: 'center', minWidth: 100,
+  },
+  rateFetchBtnText: { color: '#4a9eff', fontSize: 13, fontWeight: 'bold' },
+  rateHint: { color: '#555', fontSize: 11, marginBottom: 12, marginLeft: 2 },
 
   cashPreviewBox: {
     backgroundColor: 'rgba(233,69,96,0.12)', borderRadius: 10,
