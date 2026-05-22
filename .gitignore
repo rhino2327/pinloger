@@ -49,3 +49,6 @@ yarn-error.*
 # Google Services (sensitive)
 google-services.json
 GoogleService-Info.plist
+
+# Google Play Service Account Key (sensitive)
+store-assets/google-play-service-account.json

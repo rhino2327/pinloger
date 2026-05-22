@@ -20,12 +20,15 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocationWhenInUseUsageDescription": "여행 일정에 장소를 추가하고 지도에서 위치를 확인하기 위해 위치 정보를 사용합니다.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "여행 일정에 장소를 추가하고 지도에서 위치를 확인하기 위해 위치 정보를 사용합니다."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "여행 일정에 장소를 추가하고 지도에서 위치를 확인하기 위해 위치 정보를 사용합니다.",
+        "NSCameraUsageDescription": "프로필 사진 및 여행 사진 첨부를 위해 카메라를 사용합니다.",
+        "NSPhotoLibraryUsageDescription": "여행 사진을 앱에 추가하기 위해 사진 보관함에 접근합니다."
       }
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/adaptive-icon-android.png",
+        "monochromeImage": "./assets/adaptive-icon-android.png",
         "backgroundColor": "#1a1a2e"
       },
       "package": "com.travelapp.planner",

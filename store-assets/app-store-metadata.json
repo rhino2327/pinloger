@@ -1,0 +1,67 @@
+{
+  "apple": {
+    "categories": ["TRAVEL", "UTILITIES"],
+    "primaryLanguage": "ko",
+    "contentRightsDeclaration": "no-third-party-content",
+    "ageRating": {
+      "fifteenPlusNotAllowed": false,
+      "seventeenPlusNotAllowed": false,
+      "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+      "contests": "NONE",
+      "gambling": "NONE",
+      "gamblingAndContests": false,
+      "matureOrSuggestiveThemes": "NONE",
+      "medicalOrTreatmentInformation": "NONE",
+      "profanityOrCrudeHumor": "NONE",
+      "sexualContentGraphicAndNudity": "NONE",
+      "sexualContentOrNudity": "NONE",
+      "horrorOrFearThemesForChildren": "NONE",
+      "violenceCartoonOrFantasy": "NONE",
+      "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+      "violenceRealistic": "NONE",
+      "unrestrictedWebAccess": false,
+      "kidsAgeBand": null
+    },
+    "localizations": {
+      "ko": {
+        "name": "PINLOGER",
+        "subtitle": "여행 일정 & 비용 관리",
+        "description": "PINLOGER는 여행을 더 스마트하게 기록하고 관리하는 여행 플래너입니다.\n\n📍 주요 기능\n\n✈️ 여행 일정 관리\n• 날짜별 여행 일정 작성 및 관리\n• 장소 검색으로 자동 위치 입력\n• 지도에서 일정 확인\n• 여행 동행자 초대 및 공유\n\n💰 비용 관리\n• 여행 중 지출 내역 기록\n• 카테고리별 지출 분류 (숙박, 식비, 교통, 관광 등)\n• 멤버별 정산 기능\n\n👛 지갑 & 환전 관리\n• 환전 내역 기록\n• 통화별 잔액 확인\n• 여행별 예산 대비 지출 현황\n\n🌍 스마트 국기 감지\n• 목적지 입력 시 자동 국기 설정\n• 전 세계 200개 이상 도시 인식\n• Google 지도 연동 장소 검색\n\n👥 여행 공유\n• 초대 코드로 동행자 초대\n• 실시간 일정 및 비용 공유\n• 역할별 권한 관리 (대표/참여자)\n\n개인 여행부터 단체 여행까지, PINLOGER와 함께 완벽한 여행을 계획하세요.",
+        "keywords": "여행,일정,플래너,여행일정,비용관리,환전,여행기록,지출,여행계획,여행공유",
+        "releaseNotes": "• 목적지 자동 국기 감지 기능 개선\n• 지갑 & 환전 관리 기능 추가\n• 장소 검색 자동완성 지원\n• 성능 개선 및 버그 수정",
+        "supportUrl": "https://rhino2327.github.io/pinloger/privacy-policy.html",
+        "privacyPolicyUrl": "https://rhino2327.github.io/pinloger/privacy-policy.html",
+        "marketingUrl": ""
+      },
+      "en-US": {
+        "name": "PINLOGER",
+        "subtitle": "Travel Planner & Expense Tracker",
+        "description": "PINLOGER is a smart travel planner that helps you record and manage your trips effortlessly.\n\n📍 Key Features\n\n✈️ Trip Planning\n• Create and manage daily itineraries\n• Auto location input with place search\n• View schedule on map\n• Invite travel companions and share\n\n💰 Expense Management\n• Log expenses during travel\n• Categorize spending (accommodation, food, transport, etc.)\n• Split costs among group members\n\n👛 Wallet & Currency Exchange\n• Track currency exchange records\n• Check balance by currency\n• Monitor budget vs. spending per trip\n\n🌍 Smart Flag Detection\n• Auto country flag when entering destination\n• Recognizes 200+ cities worldwide\n• Google Maps place search integration\n\n👥 Travel Sharing\n• Invite companions with invite code\n• Real-time schedule and expense sharing\n• Role-based permissions (owner/member)\n\nFrom solo adventures to group trips, plan your perfect journey with PINLOGER.",
+        "keywords": "travel,planner,trip,itinerary,expense,budget,travel journal,vacation,currency,exchange",
+        "releaseNotes": "• Improved automatic country flag detection\n• Added Wallet & Currency Exchange feature\n• Place search autocomplete support\n• Performance improvements and bug fixes",
+        "supportUrl": "https://rhino2327.github.io/pinloger/privacy-policy.html",
+        "privacyPolicyUrl": "https://rhino2327.github.io/pinloger/privacy-policy.html",
+        "marketingUrl": ""
+      }
+    }
+  },
+  "google": {
+    "package": "com.travelapp.planner",
+    "category": "TRAVEL_AND_LOCAL",
+    "contentRating": "EVERYONE",
+    "localizations": {
+      "ko-KR": {
+        "title": "PINLOGER",
+        "shortDescription": "여행 일정, 비용, 환전을 한 번에 관리하는 여행 플래너",
+        "fullDescription": "PINLOGER는 여행을 더 스마트하게 기록하고 관리하는 여행 플래너입니다.\n\n📍 주요 기능\n\n✈️ 여행 일정 관리\n• 날짜별 여행 일정 작성 및 관리\n• 장소 검색으로 자동 위치 입력\n• 지도에서 일정 확인\n• 여행 동행자 초대 및 공유\n\n💰 비용 관리\n• 여행 중 지출 내역 기록\n• 카테고리별 지출 분류 (숙박, 식비, 교통, 관광 등)\n• 멤버별 정산 기능\n\n👛 지갑 & 환전 관리\n• 환전 내역 기록\n• 통화별 잔액 확인\n• 여행별 예산 대비 지출 현황\n\n🌍 스마트 국기 감지\n• 목적지 입력 시 자동 국기 설정\n• 전 세계 200개 이상 도시 인식\n• Google 지도 연동 장소 검색\n\n👥 여행 공유\n• 초대 코드로 동행자 초대\n• 실시간 일정 및 비용 공유\n• 역할별 권한 관리 (대표/참여자)\n\n개인 여행부터 단체 여행까지, PINLOGER와 함께 완벽한 여행을 계획하세요.",
+        "releaseNotes": "• 목적지 자동 국기 감지 기능 개선\n• 지갑 & 환전 관리 기능 추가\n• 장소 검색 자동완성 지원\n• 성능 개선 및 버그 수정"
+      },
+      "en-US": {
+        "title": "PINLOGER",
+        "shortDescription": "Travel planner for itinerary, expense & currency management",
+        "fullDescription": "PINLOGER is a smart travel planner that helps you record and manage your trips effortlessly.\n\n📍 Key Features\n\n✈️ Trip Planning\n• Create and manage daily itineraries\n• Auto location input with place search\n• View schedule on map\n• Invite travel companions and share\n\n💰 Expense Management\n• Log expenses during travel\n• Categorize spending (accommodation, food, transport, etc.)\n• Split costs among group members\n\n👛 Wallet & Currency Exchange\n• Track currency exchange records\n• Check balance by currency\n• Monitor budget vs. spending per trip\n\n🌍 Smart Flag Detection\n• Auto country flag when entering destination\n• Recognizes 200+ cities worldwide\n• Google Maps place search integration\n\n👥 Travel Sharing\n• Invite companions with invite code\n• Real-time schedule and expense sharing\n• Role-based permissions (owner/member)\n\nFrom solo adventures to group trips, plan your perfect journey with PINLOGER.",
+        "releaseNotes": "• Improved automatic country flag detection\n• Added Wallet & Currency Exchange feature\n• Place search autocomplete support\n• Performance improvements and bug fixes"
+      }
+    }
+  }
+}

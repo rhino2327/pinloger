@@ -261,8 +261,9 @@ export default function ScheduleScreen({ route }) {
 
   // 언마운트 시 타이머 정리
   useEffect(() => () => {
-    if (fromDebounce.current) clearTimeout(fromDebounce.current);
-    if (toDebounce.current)   clearTimeout(toDebounce.current);
+    if (fromDebounce.current)   clearTimeout(fromDebounce.current);
+    if (toDebounce.current)     clearTimeout(toDebounce.current);
+    if (flightDebounce.current) clearTimeout(flightDebounce.current);
   }, []);
 
   useEffect(() => {
@@ -544,14 +545,18 @@ export default function ScheduleScreen({ route }) {
       arrTerminal:      form.transport === '✈️' ? (form.arrTerminal     || '') : '',
       arrGate:          form.transport === '✈️' ? (form.arrGate         || '') : '',
     };
-    if (editingId) {
-      await updateDoc(doc(db, 'schedules', editingId), data);
-    } else {
-      await addDoc(collection(db, 'schedules'), {
-        ...data, tripId: trip.id, date: selectedDay, createdAt: serverTimestamp(),
-      });
+    try {
+      if (editingId) {
+        await updateDoc(doc(db, 'schedules', editingId), data);
+      } else {
+        await addDoc(collection(db, 'schedules'), {
+          ...data, tripId: trip.id, date: selectedDay, createdAt: serverTimestamp(),
+        });
+      }
+      setModalVisible(false);
+    } catch (e) {
+      Alert.alert('오류', '일정 저장에 실패했어요. 다시 시도해주세요.');
     }
-    setModalVisible(false);
   };
 
   const deleteSchedule = (id) => {

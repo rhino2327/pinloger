@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PINLOGER</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; }
+    .logo { font-size: 60px; margin-bottom: 16px; }
+    h1 { font-size: 48px; font-weight: 900; color: #fff; margin-bottom: 8px; }
+    .tagline { color: #aaa; font-size: 18px; margin-bottom: 48px; }
+    .links { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    a { display: inline-block; padding: 14px 28px; border-radius: 30px; text-decoration: none; font-weight: bold; font-size: 15px; transition: opacity 0.2s; }
+    a:hover { opacity: 0.8; }
+    .btn-primary { background: #e94560; color: #fff; }
+    .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); }
+    .features { margin-top: 60px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 24px; max-width: 800px; width: 100%; }
+    .feature { background: rgba(255,255,255,0.05); border-radius: 16px; padding: 24px; text-align: center; }
+    .feature-icon { font-size: 32px; margin-bottom: 12px; }
+    .feature-title { font-weight: bold; margin-bottom: 6px; }
+    .feature-desc { color: #aaa; font-size: 13px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="logo">📍</div>
+  <h1>PINLOGER</h1>
+  <p class="tagline">여행 일정 & 비용 관리 앱</p>
+  <div class="links">
+    <a href="privacy-policy.html" class="btn-secondary">개인정보 처리방침</a>
+  </div>
+  <div class="features">
+    <div class="feature">
+      <div class="feature-icon">✈️</div>
+      <div class="feature-title">여행 일정 관리</div>
+      <div class="feature-desc">날짜별 일정 작성, 장소 검색, 지도 확인</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">💰</div>
+      <div class="feature-title">비용 관리</div>
+      <div class="feature-desc">지출 기록, 카테고리 분류, 멤버 정산</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">👛</div>
+      <div class="feature-title">환전 관리</div>
+      <div class="feature-desc">환전 내역, 통화별 잔액 확인</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">👥</div>
+      <div class="feature-title">여행 공유</div>
+      <div class="feature-desc">초대 코드로 동행자 초대, 실시간 공유</div>
+    </div>
+  </div>
+</body>
+</html>

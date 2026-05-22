@@ -48,11 +48,16 @@ export default function MembersScreen({ route }) {
 
   const changeRole = async (role) => {
     if (!selectedMember) return;
-    await updateDoc(doc(db, 'trips', trip.id), {
-      [`memberRoles.${selectedMember}`]: role,
-    });
-    setRoleModalVisible(false);
-    setSelectedMember(null);
+    try {
+      await updateDoc(doc(db, 'trips', trip.id), {
+        [`memberRoles.${selectedMember}`]: role,
+      });
+    } catch (e) {
+      Alert.alert('오류', '권한 변경에 실패했어요. 다시 시도해주세요.');
+    } finally {
+      setRoleModalVisible(false);
+      setSelectedMember(null);
+    }
   };
 
   const removeMember = async (memberId) => {
@@ -65,13 +70,17 @@ export default function MembersScreen({ route }) {
       {
         text: '내보내기', style: 'destructive',
         onPress: async () => {
-          const newMembers = tripData.members.filter(m => m !== memberId);
-          const newRoles = { ...tripData.memberRoles };
-          delete newRoles[memberId];
-          await updateDoc(doc(db, 'trips', trip.id), {
-            members: newMembers,
-            memberRoles: newRoles,
-          });
+          try {
+            const newMembers = tripData.members.filter(m => m !== memberId);
+            const newRoles = { ...tripData.memberRoles };
+            delete newRoles[memberId];
+            await updateDoc(doc(db, 'trips', trip.id), {
+              members: newMembers,
+              memberRoles: newRoles,
+            });
+          } catch (e) {
+            Alert.alert('오류', '멤버 내보내기에 실패했어요. 다시 시도해주세요.');
+          }
         }
       }
     ]);

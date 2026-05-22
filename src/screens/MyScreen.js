@@ -5,32 +5,15 @@ import { db, auth } from '../config/firebase';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export default function MyScreen({ navigation }) {
-  const insets = useSafeAreaInsets();
-  const [trips, setTrips] = useState([]);
-  const { profile } = useUserProfile();
-  const today = new Date().toISOString().slice(0, 10);
+const getDuration = (start, end) => {
+  if (!start || !end) return '';
+  return `${Math.round((new Date(end) - new Date(start)) / 86400000) + 1}일`;
+};
+
+// TripCard을 컴포넌트 밖에 정의 → 렌더링마다 재생성 방지
+const TripCard = ({ item, isPast, navigation }) => {
   const user = auth.currentUser;
-
-  useEffect(() => {
-    const q = query(collection(db, 'trips'), where('members', 'array-contains', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setTrips(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    return unsubscribe;
-  }, []);
-
-  const pastTrips = trips.filter(t => t.endDate && t.endDate < today)
-    .sort((a, b) => b.endDate > a.endDate ? 1 : -1);
-  const upcomingTrips = trips.filter(t => !t.endDate || t.endDate >= today)
-    .sort((a, b) => (a.startDate || '') > (b.startDate || '') ? 1 : -1);
-
-  const getDuration = (start, end) => {
-    if (!start || !end) return '';
-    return `${Math.round((new Date(end) - new Date(start)) / 86400000) + 1}일`;
-  };
-
-  const TripCard = ({ item, isPast }) => (
+  return (
     <TouchableOpacity
       style={[styles.tripCard, isPast && styles.tripCardPast]}
       onPress={() => navigation.navigate('TripDetail', { trip: item })}
@@ -50,7 +33,7 @@ export default function MyScreen({ navigation }) {
           </View>
           <View style={styles.tag}>
             <Text style={styles.tagText}>
-              {item.memberRoles?.[user.uid] === 'owner' ? '🚩 대표' : '👥 참여'}
+              {item.memberRoles?.[user?.uid] === 'owner' ? '🚩 대표' : '👥 참여'}
             </Text>
           </View>
         </View>
@@ -58,6 +41,28 @@ export default function MyScreen({ navigation }) {
       <Text style={styles.arrow}>›</Text>
     </TouchableOpacity>
   );
+};
+
+export default function MyScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
+  const [trips, setTrips] = useState([]);
+  const { profile } = useUserProfile();
+  const today = new Date().toISOString().slice(0, 10);
+  const user = auth.currentUser;
+
+  useEffect(() => {
+    const q = query(collection(db, 'trips'), where('members', 'array-contains', user.uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setTrips(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return unsubscribe;
+  }, []);
+
+  // 지난 여행: 최신순(내림차순) — compareFn > 0 이면 b가 앞에 정렬됨
+  const pastTrips = trips.filter(t => t.endDate && t.endDate < today)
+    .sort((a, b) => b.endDate > a.endDate ? 1 : -1);
+  const upcomingTrips = trips.filter(t => !t.endDate || t.endDate >= today)
+    .sort((a, b) => (a.startDate || '') > (b.startDate || '') ? 1 : -1);
 
   const listData = [
     { type: 'profile' },
@@ -115,7 +120,7 @@ export default function MyScreen({ navigation }) {
         if (item.type === 'empty') return (
           <Text style={styles.emptyText}>아직 여행이 없어요.{'\n'}내 여행 탭에서 만들어보세요! ✈️</Text>
         );
-        return <TripCard item={item} isPast={item.isPast} />;
+        return <TripCard item={item} isPast={item.isPast} navigation={navigation} />;
       }}
     />
   );

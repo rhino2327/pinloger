@@ -43,19 +43,28 @@ export default function ProfileScreen({ navigation }) {
       setNickError('닉네임은 12자 이하여야 해요.');
       return;
     }
-    const taken = await isNicknameTaken(trimmed);
-    if (taken) {
-      setNickError('이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해주세요.');
-      return;
+    try {
+      const taken = await isNicknameTaken(trimmed);
+      if (taken) {
+        setNickError('이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해주세요.');
+        return;
+      }
+      await updateProfile({ nickname: trimmed });
+      setEditingNick(false);
+      setNickError('');
+    } catch (e) {
+      setNickError('저장에 실패했어요. 다시 시도해주세요.');
     }
-    await updateProfile({ nickname: trimmed });
-    setEditingNick(false);
-    setNickError('');
   };
 
   const selectAvatar = async (emoji) => {
-    await updateProfile({ avatar: emoji });
-    setAvatarModal(false);
+    try {
+      await updateProfile({ avatar: emoji });
+    } catch (e) {
+      Alert.alert('오류', '아바타 저장에 실패했어요. 다시 시도해주세요.');
+    } finally {
+      setAvatarModal(false);
+    }
   };
 
   const changePassword = async () => {

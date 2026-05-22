@@ -14,7 +14,7 @@
     "preview": {
       "distribution": "internal",
       "ios": {
-        "resourceClass": "m1-medium"
+        "resourceClass": "m-medium"
       },
       "android": {
         "buildType": "apk"
@@ -23,7 +23,7 @@
     "production": {
       "autoIncrement": true,
       "ios": {
-        "resourceClass": "m1-medium"
+        "resourceClass": "m-medium"
       },
       "android": {
         "buildType": "app-bundle"
@@ -31,6 +31,17 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "rhino2327@icloud.com",
+        "ascAppId": "6772281495",
+        "appleTeamId": "HN29J622CL"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./store-assets/google-play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "completed"
+      }
+    }
   }
 }

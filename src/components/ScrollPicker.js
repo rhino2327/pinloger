@@ -12,7 +12,7 @@ export default function ScrollPicker({ items, selectedValue, onValueChange, widt
     if (scrollRef.current && selectedIndex >= 0) {
       scrollRef.current.scrollTo({ y: selectedIndex * ITEM_HEIGHT, animated: false });
     }
-  }, []);
+  }, [selectedValue]); // selectedValue 변경 시 스크롤 위치 동기화
 
   const handleScroll = (e) => {
     const y = e.nativeEvent.contentOffset.y;

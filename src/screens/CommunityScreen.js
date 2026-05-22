@@ -25,7 +25,11 @@ export default function CommunityScreen({ navigation }) {
   }, []);
 
   const toggleMyTrip = async (trip) => {
-    await updateDoc(doc(db, 'trips', trip.id), { isPublic: !trip.isPublic });
+    try {
+      await updateDoc(doc(db, 'trips', trip.id), { isPublic: !trip.isPublic });
+    } catch (e) {
+      Alert.alert('오류', '공유 설정 변경에 실패했어요. 다시 시도해주세요.');
+    }
   };
 
   const copyTrip = async (trip) => {
@@ -37,18 +41,22 @@ export default function CommunityScreen({ navigation }) {
         {
           text: '복사',
           onPress: async () => {
-            const code = generateInviteCode();
-            await addDoc(collection(db, 'trips'), {
-              name: `${trip.name} (복사본)`,
-              destination: trip.destination,
-              ownerId: user.uid,
-              members: [user.uid],
-              memberRoles: { [user.uid]: 'owner' },
-              inviteCode: code,
-              isPublic: false,
-              createdAt: serverTimestamp(),
-            });
-            Alert.alert('완료', '내 여행 목록에 추가되었습니다!');
+            try {
+              const code = generateInviteCode();
+              await addDoc(collection(db, 'trips'), {
+                name: `${trip.name} (복사본)`,
+                destination: trip.destination,
+                ownerId: user.uid,
+                members: [user.uid],
+                memberRoles: { [user.uid]: 'owner' },
+                inviteCode: code,
+                isPublic: false,
+                createdAt: serverTimestamp(),
+              });
+              Alert.alert('완료', '내 여행 목록에 추가되었습니다!');
+            } catch (e) {
+              Alert.alert('오류', '여행 복사에 실패했어요. 다시 시도해주세요.');
+            }
           }
         }
       ]

@@ -247,22 +247,26 @@ export default function CostScreen({ route }) {
     const dayLabel = costDate && getDayNum(costDate) > 0
       ? `${getDayNum(costDate)}일차`
       : null;
-    if (editingCostId) {
-      await updateDoc(doc(db, 'costs', editingCostId), {
-        title: title.trim(), amount: Number(amount), currency, category,
-        date: costDate || null, dayLabel,
-      });
-    } else {
-      await addDoc(collection(db, 'costs'), {
-        tripId: trip.id, title: title.trim(),
-        amount: Number(amount), currency, category,
-        date: costDate || null, dayLabel,
-        createdAt: serverTimestamp(),
-      });
+    try {
+      if (editingCostId) {
+        await updateDoc(doc(db, 'costs', editingCostId), {
+          title: title.trim(), amount: Number(amount), currency, category,
+          date: costDate || null, dayLabel,
+        });
+      } else {
+        await addDoc(collection(db, 'costs'), {
+          tripId: trip.id, title: title.trim(),
+          amount: Number(amount), currency, category,
+          date: costDate || null, dayLabel,
+          createdAt: serverTimestamp(),
+        });
+      }
+      setTitle(''); setAmount(''); setCurrency('KRW'); setCategory('기타');
+      setCostDate('');
+      setEditingCostId(null); setAddModal(false);
+    } catch (e) {
+      Alert.alert('오류', '비용 저장에 실패했어요. 다시 시도해주세요.');
     }
-    setTitle(''); setAmount(''); setCurrency('KRW'); setCategory('기타');
-    setCostDate('');
-    setEditingCostId(null); setAddModal(false);
   };
   const deleteCost = (id) => {
     Alert.alert('삭제', '이 항목을 삭제할까요?', [
@@ -302,20 +306,24 @@ export default function CostScreen({ route }) {
       krwAmount,
       memo: cashMemo.trim(),
     };
-    if (editingExchangeId) {
-      await updateDoc(doc(db, 'exchanges', editingExchangeId), docData);
-    } else {
-      await addDoc(collection(db, 'exchanges'), {
-        uid: user.uid,
-        tripId: trip.id,
-        ...docData,
-        date: nowDateStr(),
-        createdAt: serverTimestamp(),
-      });
+    try {
+      if (editingExchangeId) {
+        await updateDoc(doc(db, 'exchanges', editingExchangeId), docData);
+      } else {
+        await addDoc(collection(db, 'exchanges'), {
+          uid: user.uid,
+          tripId: trip.id,
+          ...docData,
+          date: nowDateStr(),
+          createdAt: serverTimestamp(),
+        });
+      }
+      setCashModal(false);
+      setCashAmount(''); setCashRate(''); setCashMemo('');
+      setEditingExchangeId(null);
+    } catch (e) {
+      Alert.alert('오류', '환전 내역 저장에 실패했어요. 다시 시도해주세요.');
     }
-    setCashModal(false);
-    setCashAmount(''); setCashRate(''); setCashMemo('');
-    setEditingExchangeId(null);
   };
   const deleteExchangeRecord = (id) => {
     Alert.alert('삭제', '이 환전 기록을 삭제할까요?', [

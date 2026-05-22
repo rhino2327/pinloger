@@ -33,19 +33,29 @@ export function useUserProfile() {
    */
   const isNicknameTaken = async (nickname) => {
     if (!nickname?.trim()) return false;
-    const q = query(
-      collection(db, 'users'),
-      where('nickname', '==', nickname.trim())
-    );
-    const snap = await getDocs(q);
-    // 자기 자신의 문서만 있으면 중복 아님
-    const others = snap.docs.filter(d => d.id !== user?.uid);
-    return others.length > 0;
+    try {
+      const q = query(
+        collection(db, 'users'),
+        where('nickname', '==', nickname.trim())
+      );
+      const snap = await getDocs(q);
+      // 자기 자신의 문서만 있으면 중복 아님
+      const others = snap.docs.filter(d => d.id !== user?.uid);
+      return others.length > 0;
+    } catch (e) {
+      console.warn('닉네임 중복 체크 실패:', e);
+      return false;
+    }
   };
 
   const updateProfile = async (updates) => {
     if (!user) return;
-    await setDoc(doc(db, 'users', user.uid), updates, { merge: true });
+    try {
+      await setDoc(doc(db, 'users', user.uid), updates, { merge: true });
+    } catch (e) {
+      console.warn('프로필 업데이트 실패:', e);
+      throw e; // 호출부에서 처리할 수 있도록 re-throw
+    }
   };
 
   return { profile, updateProfile, isNicknameTaken };

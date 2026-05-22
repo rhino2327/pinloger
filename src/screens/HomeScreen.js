@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
   StyleSheet, Alert, Modal, TextInput, ScrollView,
@@ -11,6 +11,7 @@ import {
   deleteDoc, arrayRemove, deleteField,
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { generateInviteCode } from '../utils/helpers';
 import { detectFlag } from '../utils/countryFlag';
 import ScrollPicker from '../components/ScrollPicker';
@@ -83,6 +84,9 @@ export default function HomeScreen({ navigation }) {
   const [detectedFlag, setDetectedFlag] = useState('🌍');
   const [joinCode, setJoinCode] = useState('');
   const [joinModalVisible, setJoinModalVisible] = useState(false);
+  const [placeSuggestions, setPlaceSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const searchTimerRef = useRef(null);
 
   const now = new Date();
   const [startYear,  setStartYear]  = useState(String(now.getFullYear()));
@@ -106,10 +110,69 @@ export default function HomeScreen({ navigation }) {
     return unsubscribe;
   }, []);
 
+  const extractCountry = (addr) => {
+    if (!addr) return '';
+    const parts = addr.split(',');
+    return parts[parts.length - 1].trim();
+  };
+
   const handleDestinationChange = (text) => {
     setDestination(text);
-    setDetectedFlag(detectFlag(text));
+    const quickFlag = detectFlag(text);
+    if (text.trim().length < 2) {
+      // 입력이 짧으면 초기화
+      setDetectedFlag('🌍');
+      setPlaceSuggestions([]); setShowSuggestions(false);
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+      return;
+    }
+    if (quickFlag !== '🌍') {
+      // 사전에 있는 도시면 즉시 적용
+      setDetectedFlag(quickFlag);
+    }
+    // 사전에 없는 경우: 기존 국기 유지하면서 Places 검색 대기
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => searchPlaces(text), 400);
   };
+
+  const searchPlaces = async (text) => {
+    try {
+      const fn = httpsCallable(getFunctions(undefined, 'asia-northeast3'), 'googlePlaceSearch');
+      const res = await fn({ query: text, language: 'ko' });
+      const raw = res.data?.results || [];
+
+      // 국가 기준으로 중복 제거 — 같은 나라 결과는 하나만 표시
+      const seen = new Set();
+      const filtered = [];
+      for (const place of raw) {
+        const addr = place.formattedAddress || '';
+        const flag = detectFlag(addr) !== '🌍' ? detectFlag(addr) : detectFlag(place.displayName?.text || '');
+        const country = extractCountry(addr);
+        const key = flag + country;
+        if (!seen.has(key)) {
+          seen.add(key);
+          filtered.push({ ...place, _flag: flag, _country: country });
+        }
+        if (filtered.length >= 4) break;
+      }
+      setPlaceSuggestions(filtered);
+      setShowSuggestions(filtered.length > 0);
+      // 결과에서 국기 자동 적용 (사전에 없는 지명도 처리)
+      if (filtered.length > 0 && filtered[0]._flag !== '🌍') {
+        setDetectedFlag(filtered[0]._flag);
+      }
+    } catch {
+      setPlaceSuggestions([]); setShowSuggestions(false);
+    }
+  };
+
+  const handleSelectPlace = (place) => {
+    setDetectedFlag(place._flag || '🌍');
+    setShowSuggestions(false);
+    setPlaceSuggestions([]);
+  };
+
+  const clearSuggestions = () => { setShowSuggestions(false); setPlaceSuggestions([]); };
 
   const createTrip = async () => {
     if (!tripName.trim() || !destination.trim()) {
@@ -136,6 +199,7 @@ export default function HomeScreen({ navigation }) {
       createdAt: serverTimestamp(),
     });
     setTripName(''); setDestination(''); setDetectedFlag('🌍');
+    clearSuggestions();
     setModalVisible(false);
   };
 
@@ -274,7 +338,7 @@ export default function HomeScreen({ navigation }) {
               <View style={styles.destinationRow}>
                 <TextInput
                   style={[styles.modalInput, { flex: 1, marginBottom: 0 }]}
-                  placeholder="목적지 (예: 일본 도쿄)"
+                  placeholder="목적지 (예: 시즈오카, 파리, 발리)"
                   placeholderTextColor="#aaa"
                   value={destination}
                   onChangeText={handleDestinationChange}
@@ -283,7 +347,26 @@ export default function HomeScreen({ navigation }) {
                   <Text style={styles.flagText}>{detectedFlag}</Text>
                 </View>
               </View>
-              <Text style={styles.flagHint}>목적지 입력 시 국기가 자동으로 설정돼요</Text>
+
+              {/* 장소 검색 드롭다운 */}
+              {showSuggestions && placeSuggestions.length > 0 && (
+                <View style={styles.suggestionsBox}>
+                  {placeSuggestions.map((place, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[styles.suggestionItem, idx === placeSuggestions.length - 1 && { borderBottomWidth: 0 }]}
+                      onPress={() => handleSelectPlace(place)}
+                    >
+                      <Text style={styles.suggestionFlag}>{place._flag || '🌍'}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestionName}>{place._country || place.displayName?.text}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              <Text style={styles.flagHint}>지명만 입력해도 나라를 자동으로 찾아드려요</Text>
 
               <Text style={styles.dateLabel}>시작일</Text>
               <View style={styles.pickerRow}>
@@ -306,7 +389,7 @@ export default function HomeScreen({ navigation }) {
               </View>
 
               <View style={styles.modalButtons}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => { setModalVisible(false); clearSuggestions(); }}>
                   <Text style={styles.cancelBtnText}>취소</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.confirmBtn} onPress={createTrip}>
@@ -441,6 +524,19 @@ const styles = StyleSheet.create({
   },
   flagText: { fontSize: 28 },
   flagHint: { color: '#666', fontSize: 11, marginBottom: 16 },
+
+  suggestionsBox: {
+    backgroundColor: '#0f1b35', borderRadius: 10, marginBottom: 8,
+    borderWidth: 1, borderColor: '#0f3460', overflow: 'hidden',
+  },
+  suggestionItem: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14,
+    paddingVertical: 11, gap: 12,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(15,52,96,0.6)',
+  },
+  suggestionFlag: { fontSize: 24 },
+  suggestionName: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+  suggestionAddr: { color: '#666', fontSize: 11 },
   dateLabel: { color: '#aaa', fontSize: 13, marginBottom: 8 },
   pickerRow: {
     flexDirection: 'row', alignItems: 'center',

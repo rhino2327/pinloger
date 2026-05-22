@@ -80,7 +80,9 @@ export default function LoginScreen({ navigation }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [fieldErrors, setFieldErrors] = useState({ email: '', password: '' });
 
-  // 고정 redirect URI — ngrok 터널 URL은 매번 바뀌므로 Expo 프록시 고정 URL 사용
+  // Expo Go + 프로덕션 빌드 공통 redirect URI
+  // Google Cloud Console: https://auth.expo.io/@rhino2327/TravelApp 등록됨
+  // 카카오 개발자 콘솔: 동일 URI 등록 필요
   const redirectUri = `https://auth.expo.io/@${EXPO_USERNAME}/TravelApp`;
 
   const [request, response, promptAsync] = Google.useAuthRequest({
