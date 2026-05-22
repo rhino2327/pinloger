@@ -140,30 +140,37 @@ export default function CostScreen({ route }) {
     return () => { unsub1(); unsub2(); unsub3(); };
   }, []);
 
-  const fetchRates = async () => {
+  // jsDelivr CDN — CORS 없음, 브라우저/웹앱 모두 동작
+  const RATE_API = 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/krw.json';
+
+  const loadRates = async () => {
     try {
-      const res  = await fetch('https://api.exchangerate-api.com/v4/latest/KRW');
+      const res  = await fetch(RATE_API);
       const data = await res.json();
-      setExchangeRates(data.rates);
-    } catch {}
+      const normalized = {};
+      Object.entries(data.krw || {}).forEach(([k, v]) => {
+        normalized[k.toUpperCase()] = v;
+      });
+      setExchangeRates(normalized);
+      return normalized;
+    } catch {
+      return null;
+    }
   };
+
+  const fetchRates = async () => { await loadRates(); };
 
   // 현재 환율 버튼 — 1 {cashCurrency} = ? KRW 계산
   const fetchCurrentRate = async () => {
     setRateLoading(true);
     try {
       let rates = exchangeRates;
-      // 환율 캐시가 없으면 새로 가져오기
       if (!rates || Object.keys(rates).length === 0) {
-        const res  = await fetch('https://api.exchangerate-api.com/v4/latest/KRW');
-        const data = await res.json();
-        rates = data.rates;
-        setExchangeRates(rates);
+        rates = await loadRates();
       }
-      if (rates[cashCurrency] && rates[cashCurrency] > 0) {
-        // rates[cashCurrency] = 1 KRW 기준 외화 → 역수 = 1 외화 기준 KRW
+      if (rates && rates[cashCurrency] && rates[cashCurrency] > 0) {
+        // rates[cashCurrency] = 1 KRW 기준 외화량 → 역수 = 1 외화당 KRW
         const krwPerUnit = 1 / rates[cashCurrency];
-        // 100원 이상(USD 등): 정수, 미만(JPY 등): 소수점 1자리
         const rounded = krwPerUnit >= 100
           ? Math.round(krwPerUnit)
           : Math.round(krwPerUnit * 10) / 10;

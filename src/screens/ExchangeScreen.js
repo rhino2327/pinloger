@@ -203,9 +203,15 @@ export default function ExchangeScreen() {
   const fetchRates = async () => {
     setLoading(true);
     try {
-      const res  = await fetch('https://api.exchangerate-api.com/v4/latest/KRW');
+      const res  = await fetch(
+        'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/krw.json'
+      );
       const data = await res.json();
-      setRates(data.rates || {});
+      const normalized = {};
+      Object.entries(data.krw || {}).forEach(([k, v]) => {
+        normalized[k.toUpperCase()] = v;
+      });
+      setRates(normalized);
       setLastUpdated(new Date().toLocaleTimeString('ko-KR'));
     } catch {
       setRates({ USD:0.00073, JPY:0.11, EUR:0.00068, CNY:0.0053,
