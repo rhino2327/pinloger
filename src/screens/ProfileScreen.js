@@ -11,6 +11,7 @@ import {
   PhoneAuthProvider, updatePhoneNumber,
 } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
+import * as WebBrowser from 'expo-web-browser';
 import { auth, db } from '../config/firebase';
 import { useUserProfile } from '../hooks/useUserProfile';
 
@@ -145,33 +146,42 @@ export default function ProfileScreen({ navigation }) {
     );
   };
 
-  // 웹용 RecaptchaVerifier 생성
-  const getRecaptchaVerifier = () => {
-    if (Platform.OS !== 'web') return null;
-    const { RecaptchaVerifier } = require('firebase/auth');
-    if (recaptchaVerifierRef.current) return recaptchaVerifierRef.current;
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
-    return recaptchaVerifierRef.current;
-  };
-
-  // 휴대폰 인증 코드 발송 (Firebase Phone Auth — 웹 전용, 앱은 향후 지원)
+  // 휴대폰 인증 코드 발송
+  // 네이티브: 인앱 브라우저(expo-web-browser)로 reCAPTCHA 처리 후 verificationId 수신
+  // 웹: RecaptchaVerifier 직접 사용
   const handleSendPhoneCode = async () => {
     setPhoneError('');
     const trimmed = phone.trim();
     if (!trimmed) { setPhoneError('전화번호를 입력해주세요.'); return; }
-    if (Platform.OS !== 'web') {
-      setPhoneError('휴대폰 인증은 현재 앱 업데이트 준비 중입니다.\nweb.pinloger.web.app 에서 이용해주세요.');
-      return;
-    }
     const normalized = normalizePhone(trimmed);
     setPhoneLoading(true);
     try {
-      const verifier = getRecaptchaVerifier();
-      const provider = new PhoneAuthProvider(auth);
-      const vid = await provider.verifyPhoneNumber(normalized, verifier);
-      setVerificationId(vid);
+      if (Platform.OS === 'web') {
+        // 웹: RecaptchaVerifier 직접 사용
+        const { RecaptchaVerifier } = require('firebase/auth');
+        if (!recaptchaVerifierRef.current) {
+          const container = document.createElement('div');
+          document.body.appendChild(container);
+          recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
+        }
+        const provider = new PhoneAuthProvider(auth);
+        const vid = await provider.verifyPhoneNumber(normalized, recaptchaVerifierRef.current);
+        setVerificationId(vid);
+      } else {
+        // 네이티브: 인앱 브라우저로 reCAPTCHA 처리
+        const verifyUrl = `https://pinloger.web.app/phone-verify?phone=${encodeURIComponent(normalized)}&redirect=pinloger%3A%2F%2Fphone-verify-callback`;
+        const result = await WebBrowser.openAuthSessionAsync(verifyUrl, 'pinloger://phone-verify-callback');
+        if (result.type !== 'success') {
+          setPhoneError('인증이 취소됐어요. 다시 시도해주세요.');
+          return;
+        }
+        const url = new URL(result.url);
+        const vid = url.searchParams.get('verificationId');
+        const err = url.searchParams.get('error');
+        if (err) { setPhoneError(decodeURIComponent(err)); return; }
+        if (!vid) { setPhoneError('인증에 실패했어요. 다시 시도해주세요.'); return; }
+        setVerificationId(decodeURIComponent(vid));
+      }
       setPhoneStep('verify');
     } catch (error) {
       if (error.code === 'auth/invalid-phone-number') {

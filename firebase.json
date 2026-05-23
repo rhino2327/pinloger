@@ -19,7 +19,10 @@
   "hosting": {
     "site": "pinloger",
     "public": "dist",
-    "predeploy": ["cp web-static/privacy.html dist/privacy.html"],
+    "predeploy": [
+      "cp web-static/privacy.html dist/privacy.html",
+      "cp web-static/phone-verify.html dist/phone-verify.html"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -29,6 +32,10 @@
       {
         "source": "/privacy",
         "destination": "/privacy.html"
+      },
+      {
+        "source": "/phone-verify",
+        "destination": "/phone-verify.html"
       },
       {
         "source": "**",

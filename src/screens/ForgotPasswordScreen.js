@@ -6,7 +6,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { httpsCallable } from 'firebase/functions';
-import { signInWithPhoneNumber, updatePassword } from 'firebase/auth';
+import { signInWithPhoneNumber, updatePassword, PhoneAuthProvider } from 'firebase/auth';
+import * as WebBrowser from 'expo-web-browser';
 import { auth, functions } from '../config/firebase';
 
 const STEP = {
@@ -32,17 +33,6 @@ export default function ForgotPasswordScreen({ navigation }) {
   // 전화번호 인증 (Firebase Phone Auth)
   const [confirmationResult, setConfirmationResult] = useState(null);
   const recaptchaVerifierRef = useRef(null);
-
-  // 웹용 RecaptchaVerifier 생성
-  const getRecaptchaVerifier = () => {
-    if (Platform.OS !== 'web') return null;
-    const { RecaptchaVerifier } = require('firebase/auth');
-    if (recaptchaVerifierRef.current) return recaptchaVerifierRef.current;
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
-    return recaptchaVerifierRef.current;
-  };
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -114,20 +104,43 @@ export default function ForgotPasswordScreen({ navigation }) {
     }
   };
 
-  // ── 전화: 인증 코드 발송 (Firebase Phone Auth — 웹 전용) ────
+  // ── 전화: 인증 코드 발송 (네이티브: 인앱 브라우저 / 웹: RecaptchaVerifier) ──
   const sendPhoneCode = async () => {
     clearState();
     const trimmed = phone.trim();
     if (!trimmed) { setError('전화번호를 입력해주세요.'); return; }
-    if (Platform.OS !== 'web') {
-      setError('전화번호 인증은 앱 업데이트 준비 중입니다.\n이메일 탭을 이용해주세요.');
-      return;
-    }
     const normalized = normalizePhone(trimmed);
     setLoading(true);
     try {
-      const verifier = getRecaptchaVerifier();
-      const result = await signInWithPhoneNumber(auth, normalized, verifier);
+      let result;
+      if (Platform.OS === 'web') {
+        const { RecaptchaVerifier } = require('firebase/auth');
+        if (!recaptchaVerifierRef.current) {
+          const container = document.createElement('div');
+          document.body.appendChild(container);
+          recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
+        }
+        result = await signInWithPhoneNumber(auth, normalized, recaptchaVerifierRef.current);
+        setConfirmationResult(result);
+        setStep(STEP.CODE);
+        setLoading(false);
+        return;
+      }
+      // 네이티브: 인앱 브라우저로 reCAPTCHA 처리 후 verificationId 수신
+      const verifyUrl = `https://pinloger.web.app/phone-verify?phone=${encodeURIComponent(normalized)}&redirect=pinloger%3A%2F%2Fphone-verify-callback`;
+      const browserResult = await WebBrowser.openAuthSessionAsync(verifyUrl, 'pinloger://phone-verify-callback');
+      if (browserResult.type !== 'success') {
+        setError('인증이 취소됐어요. 다시 시도해주세요.');
+        setLoading(false);
+        return;
+      }
+      const url = new URL(browserResult.url);
+      const vid = url.searchParams.get('verificationId');
+      const err = url.searchParams.get('error');
+      if (err) { setError(decodeURIComponent(err)); setLoading(false); return; }
+      if (!vid) { setError('인증에 실패했어요. 다시 시도해주세요.'); setLoading(false); return; }
+      // 네이티브: verificationId 저장 후 코드 입력 단계로
+      setConfirmationResult({ verificationId: decodeURIComponent(vid), isNative: true });
       setConfirmationResult(result);
       setStep(STEP.CODE);
     } catch (e) {
@@ -143,7 +156,7 @@ export default function ForgotPasswordScreen({ navigation }) {
     }
   };
 
-  // ── 전화: 코드 확인 (Firebase Phone Auth) ──────────────────
+  // ── 전화: 코드 확인 ─────────────────────────────────────────
   const verifyPhoneCode = async () => {
     clearState();
     if (!otp.trim() || otp.trim().length < 6) {
@@ -151,10 +164,20 @@ export default function ForgotPasswordScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const userCredential = await confirmationResult.confirm(otp.trim());
-      if (!userCredential.user.email) {
-        // 새로 생성된 전화번호 전용 계정 → 삭제 후 에러
-        await userCredential.user.delete();
+      let user;
+      if (confirmationResult?.isNative) {
+        // 네이티브: verificationId + 코드로 signInWithCredential
+        const { signInWithCredential } = require('firebase/auth');
+        const credential = PhoneAuthProvider.credential(confirmationResult.verificationId, otp.trim());
+        const userCredential = await signInWithCredential(auth, credential);
+        user = userCredential.user;
+      } else {
+        // 웹: ConfirmationResult.confirm()
+        const userCredential = await confirmationResult.confirm(otp.trim());
+        user = userCredential.user;
+      }
+      if (!user.email) {
+        await user.delete();
         setError('이 번호로 등록된 계정이 없어요. 이메일로 시도해주세요.');
         setStep(STEP.INPUT);
         return;
