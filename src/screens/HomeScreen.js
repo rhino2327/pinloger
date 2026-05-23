@@ -21,14 +21,27 @@ const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0
 const DAYS   = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
 const DELETE_BTN_W = 80;
+const EDIT_BTN_W   = 64;
+
+// Cross-platform confirm dialog
+function crossConfirm(title, message, confirmText, onConfirm) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n\n${message}`)) onConfirm();
+  } else {
+    Alert.alert(title, message, [
+      { text: '취소', style: 'cancel' },
+      { text: confirmText, style: 'destructive', onPress: onConfirm },
+    ]);
+  }
+}
 
 // ── 개별 카드 컴포넌트 ───────────────────────────────────────
-function TripCard({ item, deleteMode, onPress, onDelete, userId }) {
+function TripCard({ item, deleteMode, onPress, onDelete, onEdit, userId }) {
   const isOwner = item.memberRoles?.[userId] === 'owner';
 
   return (
     <View style={[styles.cardWrapper, deleteMode && styles.cardWrapperEdit]}>
-      {/* 카드 본체 — 편집 모드에서도 텍스트 그대로 */}
+      {/* 카드 본체 */}
       <TouchableOpacity
         style={[styles.tripCard, deleteMode && styles.tripCardEdit]}
         onPress={deleteMode ? null : onPress}
@@ -51,7 +64,19 @@ function TripCard({ item, deleteMode, onPress, onDelete, userId }) {
         {!deleteMode && <Text style={styles.arrow}>›</Text>}
       </TouchableOpacity>
 
-      {/* 삭제/나가기 버튼 — 편집 모드에서만, 카드 오른쪽에 경계 없이 붙음 */}
+      {/* 편집 버튼 */}
+      {deleteMode && (
+        <TouchableOpacity
+          style={styles.editActionBtn}
+          onPress={() => onEdit(item)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.editActionIcon}>✏️</Text>
+          <Text style={styles.editActionText}>편집</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* 삭제/나가기 버튼 */}
       {deleteMode && (
         <TouchableOpacity
           style={[styles.deleteActionBtn, !isOwner && styles.leaveActionBtn]}
@@ -73,6 +98,15 @@ function getDuration(start, end) {
   return `${days}일`;
 }
 
+function parseDateParts(dateStr) {
+  if (!dateStr || dateStr.length < 10) return null;
+  return {
+    year: dateStr.slice(0, 4),
+    month: dateStr.slice(5, 7),
+    day: dateStr.slice(8, 10),
+  };
+}
+
 // ── 메인 화면 ─────────────────────────────────────────────
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -88,6 +122,14 @@ export default function HomeScreen({ navigation }) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchTimerRef = useRef(null);
 
+  // 여행 편집 모달 상태
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editingTrip, setEditingTrip] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editDestination, setEditDestination] = useState('');
+  const [editDetectedFlag, setEditDetectedFlag] = useState('🌍');
+  const [editSaving, setEditSaving] = useState(false);
+
   const now = new Date();
   const [startYear,  setStartYear]  = useState(String(now.getFullYear()));
   const [startMonth, setStartMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
@@ -95,6 +137,13 @@ export default function HomeScreen({ navigation }) {
   const [endYear,    setEndYear]    = useState(String(now.getFullYear()));
   const [endMonth,   setEndMonth]   = useState(String(now.getMonth() + 1).padStart(2, '0'));
   const [endDay,     setEndDay]     = useState(String(now.getDate() + 3).padStart(2, '0'));
+
+  const [editStartYear,  setEditStartYear]  = useState(String(now.getFullYear()));
+  const [editStartMonth, setEditStartMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
+  const [editStartDay,   setEditStartDay]   = useState(String(now.getDate()).padStart(2, '0'));
+  const [editEndYear,    setEditEndYear]    = useState(String(now.getFullYear()));
+  const [editEndMonth,   setEditEndMonth]   = useState(String(now.getMonth() + 1).padStart(2, '0'));
+  const [editEndDay,     setEditEndDay]     = useState(String(now.getDate()).padStart(2, '0'));
 
   const user = auth.currentUser;
 
@@ -104,7 +153,6 @@ export default function HomeScreen({ navigation }) {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setTrips(data);
-      // 여행이 없으면 편집 모드 자동 해제
       if (data.length === 0) setDeleteMode(false);
     });
     return unsubscribe;
@@ -120,19 +168,20 @@ export default function HomeScreen({ navigation }) {
     setDestination(text);
     const quickFlag = detectFlag(text);
     if (text.trim().length < 2) {
-      // 입력이 짧으면 초기화
       setDetectedFlag('🌍');
       setPlaceSuggestions([]); setShowSuggestions(false);
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       return;
     }
-    if (quickFlag !== '🌍') {
-      // 사전에 있는 도시면 즉시 적용
-      setDetectedFlag(quickFlag);
-    }
-    // 사전에 없는 경우: 기존 국기 유지하면서 Places 검색 대기
+    if (quickFlag !== '🌍') setDetectedFlag(quickFlag);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => searchPlaces(text), 400);
+  };
+
+  const handleEditDestinationChange = (text) => {
+    setEditDestination(text);
+    const flag = detectFlag(text);
+    if (flag !== '🌍') setEditDetectedFlag(flag);
   };
 
   const searchPlaces = async (text) => {
@@ -140,8 +189,6 @@ export default function HomeScreen({ navigation }) {
       const fn = httpsCallable(getFunctions(undefined, 'asia-northeast3'), 'googlePlaceSearch');
       const res = await fn({ query: text, language: 'ko' });
       const raw = res.data?.results || [];
-
-      // 국가 기준으로 중복 제거 — 같은 나라 결과는 하나만 표시
       const seen = new Set();
       const filtered = [];
       for (const place of raw) {
@@ -157,10 +204,7 @@ export default function HomeScreen({ navigation }) {
       }
       setPlaceSuggestions(filtered);
       setShowSuggestions(filtered.length > 0);
-      // 결과에서 국기 자동 적용 (사전에 없는 지명도 처리)
-      if (filtered.length > 0 && filtered[0]._flag !== '🌍') {
-        setDetectedFlag(filtered[0]._flag);
-      }
+      if (filtered.length > 0 && filtered[0]._flag !== '🌍') setDetectedFlag(filtered[0]._flag);
     } catch {
       setPlaceSuggestions([]); setShowSuggestions(false);
     }
@@ -226,38 +270,96 @@ export default function HomeScreen({ navigation }) {
     const isOwner = item.memberRoles?.[user.uid] === 'owner';
 
     if (isOwner) {
-      Alert.alert(
+      crossConfirm(
         '여행 삭제',
         `"${item.name}" 여행을 삭제할까요?\n삭제 시 모든 일정과 비용 데이터가 함께 삭제됩니다.`,
-        [
-          { text: '취소', style: 'cancel' },
-          {
-            text: '삭제',
-            style: 'destructive',
-            onPress: async () => {
-              await deleteDoc(doc(db, 'trips', item.id));
-            },
-          },
-        ]
+        '삭제',
+        async () => {
+          await deleteDoc(doc(db, 'trips', item.id));
+        }
       );
     } else {
-      Alert.alert(
+      crossConfirm(
         '여행 나가기',
         `"${item.name}" 여행에서 나갈까요?`,
-        [
-          { text: '취소', style: 'cancel' },
-          {
-            text: '나가기',
-            style: 'destructive',
-            onPress: async () => {
-              await updateDoc(doc(db, 'trips', item.id), {
-                members: arrayRemove(user.uid),
-                [`memberRoles.${user.uid}`]: deleteField(),
-              });
-            },
-          },
-        ]
+        '나가기',
+        async () => {
+          await updateDoc(doc(db, 'trips', item.id), {
+            members: arrayRemove(user.uid),
+            [`memberRoles.${user.uid}`]: deleteField(),
+          });
+        }
       );
+    }
+  };
+
+  // 여행 편집 모달 열기
+  const openEditModal = (item) => {
+    setEditingTrip(item);
+    setEditName(item.name || '');
+    setEditDestination(item.destination || '');
+    setEditDetectedFlag(item.flag || '🌍');
+
+    const sp = parseDateParts(item.startDate) || parseDateParts(new Date().toISOString());
+    const ep = parseDateParts(item.endDate) || sp;
+    setEditStartYear(sp.year);
+    setEditStartMonth(sp.month);
+    setEditStartDay(sp.day);
+    setEditEndYear(ep.year);
+    setEditEndMonth(ep.month);
+    setEditEndDay(ep.day);
+
+    setEditModalVisible(true);
+  };
+
+  // 여행 편집 저장 + 일정 날짜 재매핑
+  const saveEditTrip = async () => {
+    if (!editName.trim() || !editDestination.trim()) {
+      Alert.alert('알림', '여행 이름과 목적지를 입력해주세요.');
+      return;
+    }
+    const newStart = `${editStartYear}-${editStartMonth}-${editStartDay}`;
+    const newEnd   = `${editEndYear}-${editEndMonth}-${editEndDay}`;
+    if (newStart > newEnd) {
+      Alert.alert('알림', '종료일이 시작일보다 빠를 수 없어요.');
+      return;
+    }
+
+    setEditSaving(true);
+    try {
+      const oldStart = editingTrip.startDate;
+
+      await updateDoc(doc(db, 'trips', editingTrip.id), {
+        name: editName.trim(),
+        destination: editDestination.trim(),
+        flag: editDetectedFlag,
+        startDate: newStart,
+        endDate: newEnd,
+      });
+
+      // 시작일이 바뀐 경우 세부 일정 날짜 재매핑
+      if (oldStart && oldStart !== newStart) {
+        const schedSnap = await getDocs(
+          query(collection(db, 'schedules'), where('tripId', '==', editingTrip.id))
+        );
+        const oldStartMs = new Date(oldStart).getTime();
+        const newStartMs = new Date(newStart).getTime();
+        await Promise.all(schedSnap.docs.map(d => {
+          const schedDate = d.data().date;
+          if (!schedDate) return Promise.resolve();
+          const diffDays = Math.round((new Date(schedDate).getTime() - oldStartMs) / 86400000);
+          const clampedDiff = Math.max(0, diffDays); // 시작일 이전 일정은 DAY1로
+          const newDateMs = newStartMs + clampedDiff * 86400000;
+          const newDateStr = new Date(newDateMs).toISOString().slice(0, 10);
+          return updateDoc(doc(db, 'schedules', d.id), { date: newDateStr });
+        }));
+      }
+
+      setEditModalVisible(false);
+    } catch {
+      Alert.alert('오류', '저장 중 오류가 발생했어요. 다시 시도해주세요.');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -281,7 +383,7 @@ export default function HomeScreen({ navigation }) {
       {deleteMode && (
         <View style={styles.deleteModeBar}>
           <Text style={styles.deleteModeBarText}>
-            🗑 삭제할 여행을 선택하세요 · 🚩 대표는 삭제, 👥 참여자는 나가기
+            ✏️ 편집 · 🗑 삭제 (대표) · 🚪 나가기 (참여자)
           </Text>
         </View>
       )}
@@ -300,6 +402,7 @@ export default function HomeScreen({ navigation }) {
             userId={user.uid}
             onPress={() => navigation.navigate('TripDetail', { trip: item })}
             onDelete={handleDelete}
+            onEdit={openEditModal}
           />
         )}
       />
@@ -348,7 +451,6 @@ export default function HomeScreen({ navigation }) {
                 </View>
               </View>
 
-              {/* 장소 검색 드롭다운 */}
               {showSuggestions && placeSuggestions.length > 0 && (
                 <View style={styles.suggestionsBox}>
                   {placeSuggestions.map((place, idx) => (
@@ -431,6 +533,82 @@ export default function HomeScreen({ navigation }) {
         </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* 여행 편집 모달 */}
+      <Modal visible={editModalVisible} transparent animationType="slide">
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+        <View style={styles.modalOverlay}>
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
+              <Text style={styles.modalTitle}>여행 편집</Text>
+
+              <TextInput
+                style={styles.modalInput}
+                placeholder="여행 이름"
+                placeholderTextColor="#aaa"
+                value={editName}
+                onChangeText={setEditName}
+              />
+
+              <View style={styles.destinationRow}>
+                <TextInput
+                  style={[styles.modalInput, { flex: 1, marginBottom: 0 }]}
+                  placeholder="목적지"
+                  placeholderTextColor="#aaa"
+                  value={editDestination}
+                  onChangeText={handleEditDestinationChange}
+                />
+                <View style={styles.flagBox}>
+                  <Text style={styles.flagText}>{editDetectedFlag}</Text>
+                </View>
+              </View>
+
+              <Text style={styles.flagHint}>날짜를 바꾸면 기존 세부일정 날짜도 자동으로 조정돼요</Text>
+
+              <Text style={styles.dateLabel}>시작일</Text>
+              <View style={styles.pickerRow}>
+                <ScrollPicker items={YEARS}  selectedValue={editStartYear}  onValueChange={setEditStartYear}  width={72} />
+                <Text style={styles.pickerSep}>년</Text>
+                <ScrollPicker items={MONTHS} selectedValue={editStartMonth} onValueChange={setEditStartMonth} width={52} />
+                <Text style={styles.pickerSep}>월</Text>
+                <ScrollPicker items={DAYS}   selectedValue={editStartDay}   onValueChange={setEditStartDay}   width={52} />
+                <Text style={styles.pickerSep}>일</Text>
+              </View>
+
+              <Text style={styles.dateLabel}>종료일</Text>
+              <View style={styles.pickerRow}>
+                <ScrollPicker items={YEARS}  selectedValue={editEndYear}  onValueChange={setEditEndYear}  width={72} />
+                <Text style={styles.pickerSep}>년</Text>
+                <ScrollPicker items={MONTHS} selectedValue={editEndMonth} onValueChange={setEditEndMonth} width={52} />
+                <Text style={styles.pickerSep}>월</Text>
+                <ScrollPicker items={DAYS}   selectedValue={editEndDay}   onValueChange={setEditEndDay}   width={52} />
+                <Text style={styles.pickerSep}>일</Text>
+              </View>
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => setEditModalVisible(false)}
+                  disabled={editSaving}
+                >
+                  <Text style={styles.cancelBtnText}>취소</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.confirmBtn, editSaving && { opacity: 0.6 }]}
+                  onPress={saveEditTrip}
+                  disabled={editSaving}
+                >
+                  <Text style={styles.confirmBtnText}>{editSaving ? '저장 중...' : '저장'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -460,20 +638,25 @@ const styles = StyleSheet.create({
 
   list: { padding: 20, paddingBottom: 100 },
 
-  // 카드 래퍼 — 항상 row, overflow:hidden으로 둥근 모서리 처리
   cardWrapper: {
     marginBottom: 14,
     borderRadius: 14,
     overflow: 'hidden',
     flexDirection: 'row',
   },
-  // 편집 모드: 래퍼에 테두리, 카드 개별 테두리 제거
   cardWrapperEdit: {
     borderWidth: 1,
     borderColor: '#0f3460',
   },
 
-  // 삭제/나가기 버튼 — 카드 오른쪽에 경계 없이 붙음
+  editActionBtn: {
+    width: EDIT_BTN_W,
+    backgroundColor: '#4a9eff',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  editActionIcon: { fontSize: 18, marginBottom: 2 },
+  editActionText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+
   deleteActionBtn: {
     width: DELETE_BTN_W,
     backgroundColor: '#e94560',
@@ -483,14 +666,12 @@ const styles = StyleSheet.create({
   deleteActionIcon: { fontSize: 20, marginBottom: 2 },
   deleteActionText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
 
-  // 트립 카드
   tripCard: {
     flex: 1,
     backgroundColor: '#16213e', borderRadius: 14, padding: 16,
     flexDirection: 'row', alignItems: 'center',
     borderWidth: 1, borderColor: '#0f3460',
   },
-  // 편집 모드: 카드 개별 테두리·radius 제거 (래퍼가 담당)
   tripCardEdit: {
     borderWidth: 0,
     borderRadius: 0,

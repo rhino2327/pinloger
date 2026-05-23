@@ -1,22 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform,
   ScrollView, ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  sendPasswordResetEmail,
-  signInWithPhoneNumber,
-  updatePassword,
-} from 'firebase/auth';
-import { auth } from '../config/firebase';
-
-// 웹에서만 RecaptchaVerifier 사용
-let RecaptchaVerifier;
-if (Platform.OS === 'web') {
-  RecaptchaVerifier = require('firebase/auth').RecaptchaVerifier;
-}
+import { httpsCallable } from 'firebase/functions';
+import { signInWithPhoneNumber, updatePassword } from 'firebase/auth';
+import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
+import { auth, app, functions } from '../config/firebase';
 
 const STEP = {
   INPUT: 'input',
@@ -34,8 +26,13 @@ export default function ForgotPasswordScreen({ navigation }) {
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [confirmResult, setConfirmResult] = useState(null);
-  const [phoneUser, setPhoneUser] = useState(null);
+
+  // 이메일 재설정 플로우에서 코드를 저장해 두었다가 resetPasswordWithCode에 전달
+  const [verifiedCode, setVerifiedCode] = useState('');
+
+  // 전화번호 인증 (Firebase Phone Auth)
+  const [confirmationResult, setConfirmationResult] = useState(null);
+  const recaptchaVerifier = useRef(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -43,8 +40,16 @@ export default function ForgotPasswordScreen({ navigation }) {
 
   const clearState = () => { setError(''); setSuccessMsg(''); };
 
-  // ── 이메일 재설정 ─────────────────────────────────────────
-  const sendEmailReset = async () => {
+  // 정규화된 전화번호 반환 (+82 형식)
+  const normalizePhone = (raw) => {
+    let n = raw.trim().replace(/[\s\-()]/g, '');
+    if (n.startsWith('0')) n = '+82' + n.slice(1);
+    else if (!n.startsWith('+')) n = '+82' + n;
+    return n;
+  };
+
+  // ── 이메일: 인증 코드 발송 ──────────────────────────────────
+  const sendEmailCode = async () => {
     clearState();
     if (!email.trim()) { setError('이메일을 입력해주세요.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -52,91 +57,108 @@ export default function ForgotPasswordScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      await sendPasswordResetEmail(auth, email.trim());
-      setStep(STEP.DONE);
-      setSuccessMsg(`${email.trim()} 으로\n비밀번호 재설정 링크를 보냈어요.\n메일함을 확인해주세요.`);
-    } catch (e) {
-      const msgs = {
-        'auth/user-not-found': '등록되지 않은 이메일입니다.',
-        'auth/invalid-email': '올바른 이메일 형식이 아닙니다.',
-        'auth/too-many-requests': '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
-      };
-      setError(msgs[e.code] || '오류가 발생했어요. 다시 시도해주세요.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ── 전화 인증: 코드 발송 (웹 전용) ──────────────────────────
-  const sendPhoneCode = async () => {
-    clearState();
-
-    // 네이티브(Expo Go)에서는 안내 메시지 표시
-    if (Platform.OS !== 'web') {
-      setError('전화번호 인증은 현재 앱 빌드(iOS/Android) 환경에서만 지원됩니다.\n이메일로 비밀번호를 재설정해주세요.');
-      return;
-    }
-
-    const cleaned = phone.trim().replace(/[\s\-]/g, '');
-    if (!cleaned) { setError('전화번호를 입력해주세요.'); return; }
-
-    let formatted = cleaned;
-    if (formatted.startsWith('0')) {
-      formatted = '+82' + formatted.slice(1);
-    } else if (!formatted.startsWith('+')) {
-      formatted = '+82' + formatted;
-    }
-
-    setLoading(true);
-    try {
-      if (!window._recaptchaVerifier) {
-        window._recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          size: 'invisible',
-          callback: () => {},
-        });
-      }
-      const result = await signInWithPhoneNumber(auth, formatted, window._recaptchaVerifier);
-      setConfirmResult(result);
+      const fn = httpsCallable(functions, 'sendEmailCode');
+      await fn({ email: email.trim(), purpose: 'reset' });
       setStep(STEP.CODE);
     } catch (e) {
-      const msgs = {
-        'auth/invalid-phone-number': '올바른 전화번호 형식이 아닙니다. (예: 010-1234-5678)',
-        'auth/too-many-requests': '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.',
-        'auth/quota-exceeded': 'SMS 발송 한도를 초과했습니다.',
-      };
-      setError(msgs[e.code] || `전화 인증 오류: ${e.message}`);
-      if (window._recaptchaVerifier) {
-        window._recaptchaVerifier.clear();
-        window._recaptchaVerifier = null;
+      if (e.code === 'functions/not-found') {
+        setError('등록되지 않은 이메일입니다.');
+      } else if (e.code === 'functions/resource-exhausted') {
+        setError('1분 후 다시 요청해주세요.');
+      } else if (e.code === 'functions/invalid-argument') {
+        setError('올바른 이메일 형식이 아닙니다.');
+      } else {
+        setError(e.message || '오류가 발생했어요. 다시 시도해주세요.');
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // ── OTP 확인 ─────────────────────────────────────────────
-  const verifyOtp = async () => {
+  // ── 이메일: 코드 확인 ───────────────────────────────────────
+  const verifyEmailCode = async () => {
     clearState();
     if (!otp.trim() || otp.trim().length < 6) {
       setError('6자리 인증 코드를 입력해주세요.'); return;
     }
     setLoading(true);
     try {
-      const result = await confirmResult.confirm(otp.trim());
-      setPhoneUser(result.user);
+      const fn = httpsCallable(functions, 'verifyEmailCode');
+      await fn({ email: email.trim(), code: otp.trim() });
+      setVerifiedCode(otp.trim());
       setStep(STEP.NEW_PW);
     } catch (e) {
-      const msgs = {
-        'auth/invalid-verification-code': '인증 코드가 올바르지 않습니다.',
-        'auth/code-expired': '인증 코드가 만료됐습니다. 다시 요청해주세요.',
-      };
-      setError(msgs[e.code] || '인증 코드 확인 중 오류가 발생했어요.');
+      if (e.code === 'functions/unauthenticated') {
+        setError('인증 코드가 올바르지 않아요.');
+      } else if (e.code === 'functions/deadline-exceeded') {
+        setError('코드가 만료됐어요. 다시 요청해주세요.');
+      } else if (e.code === 'functions/failed-precondition') {
+        setError('이미 사용된 코드입니다. 다시 요청해주세요.');
+      } else if (e.code === 'functions/not-found') {
+        setError('인증 코드를 찾을 수 없어요. 다시 요청해주세요.');
+      } else {
+        setError(e.message || '오류가 발생했어요. 다시 시도해주세요.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // ── 새 비밀번호 저장 ──────────────────────────────────────
+  // ── 전화: 인증 코드 발송 (Firebase Phone Auth) ─────────────
+  const sendPhoneCode = async () => {
+    clearState();
+    const trimmed = phone.trim();
+    if (!trimmed) { setError('전화번호를 입력해주세요.'); return; }
+    const normalized = normalizePhone(trimmed);
+    setLoading(true);
+    try {
+      const result = await signInWithPhoneNumber(auth, normalized, recaptchaVerifier.current);
+      setConfirmationResult(result);
+      setStep(STEP.CODE);
+    } catch (e) {
+      if (e.code === 'auth/invalid-phone-number') {
+        setError('올바른 전화번호 형식이 아닙니다.');
+      } else if (e.code === 'auth/too-many-requests') {
+        setError('요청이 너무 많습니다. 잠시 후 다시 시도해주세요.');
+      } else {
+        setError('SMS 발송에 실패했어요. 이메일로 시도해주세요.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── 전화: 코드 확인 (Firebase Phone Auth) ──────────────────
+  const verifyPhoneCode = async () => {
+    clearState();
+    if (!otp.trim() || otp.trim().length < 6) {
+      setError('6자리 인증 코드를 입력해주세요.'); return;
+    }
+    setLoading(true);
+    try {
+      const userCredential = await confirmationResult.confirm(otp.trim());
+      if (!userCredential.user.email) {
+        // 새로 생성된 전화번호 전용 계정 → 삭제 후 에러
+        await userCredential.user.delete();
+        setError('이 번호로 등록된 계정이 없어요. 이메일로 시도해주세요.');
+        setStep(STEP.INPUT);
+        return;
+      }
+      setStep(STEP.NEW_PW);
+    } catch (e) {
+      if (e.code === 'auth/invalid-verification-code') {
+        setError('인증 코드가 올바르지 않아요.');
+      } else if (e.code === 'auth/code-expired') {
+        setError('코드가 만료됐어요. 다시 요청해주세요.');
+      } else {
+        setError(e.message || '인증에 실패했어요.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── 새 비밀번호 저장 ────────────────────────────────────────
   const saveNewPassword = async () => {
     clearState();
     if (!newPassword) { setError('새 비밀번호를 입력해주세요.'); return; }
@@ -144,11 +166,23 @@ export default function ForgotPasswordScreen({ navigation }) {
     if (newPassword !== confirmPassword) { setError('비밀번호가 일치하지 않습니다.'); return; }
     setLoading(true);
     try {
-      await updatePassword(phoneUser, newPassword);
+      if (tab === 'phone') {
+        // 이미 signInWithPhoneNumber로 로그인됨
+        await updatePassword(auth.currentUser, newPassword);
+      } else {
+        const fn = httpsCallable(functions, 'resetPasswordWithCode');
+        await fn({ target: email.trim(), type: 'email', code: verifiedCode, newPassword });
+      }
       setStep(STEP.DONE);
       setSuccessMsg('비밀번호가 성공적으로 변경됐어요!\n새 비밀번호로 로그인해주세요.');
     } catch (e) {
-      setError('비밀번호 변경 중 오류가 발생했어요. 다시 시도해주세요.');
+      if (e.code === 'auth/requires-recent-login') {
+        setError('보안을 위해 다시 인증해주세요.');
+      } else if (e.code === 'functions/unauthenticated') {
+        setError('인증 코드가 올바르지 않아요.');
+      } else {
+        setError(e.message || '비밀번호 변경 중 오류가 발생했어요.');
+      }
     } finally {
       setLoading(false);
     }
@@ -159,21 +193,24 @@ export default function ForgotPasswordScreen({ navigation }) {
     setEmail(''); setPhone(''); setOtp('');
     setNewPassword(''); setConfirmPassword('');
     setError(''); setSuccessMsg('');
-    setConfirmResult(null); setPhoneUser(null);
+    setVerifiedCode('');
+    setConfirmationResult(null);
   };
 
   const switchTab = (t) => { setTab(t); resetAll(); };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <FirebaseRecaptchaVerifierModal
+        ref={recaptchaVerifier}
+        firebaseConfig={app.options}
+        attemptInvisibleVerification={true}
+      />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
-      {/* 웹용 invisible reCAPTCHA */}
-      {Platform.OS === 'web' && <View nativeID="recaptcha-container" />}
-
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
@@ -188,7 +225,7 @@ export default function ForgotPasswordScreen({ navigation }) {
           가입 시 사용한 이메일 또는 전화번호로{'\n'}인증 후 비밀번호를 재설정할 수 있어요.
         </Text>
 
-        {/* 탭 */}
+        {/* 탭 — INPUT 단계에서만 표시 */}
         {step === STEP.INPUT && (
           <View style={styles.tabRow}>
             <TouchableOpacity
@@ -210,9 +247,7 @@ export default function ForgotPasswordScreen({ navigation }) {
         {step === STEP.DONE && (
           <View style={styles.doneBox}>
             <Text style={styles.doneIcon}>✅</Text>
-            <Text style={styles.doneTitle}>
-              {tab === 'email' ? '메일을 보냈어요!' : '비밀번호 변경 완료!'}
-            </Text>
+            <Text style={styles.doneTitle}>비밀번호 변경 완료!</Text>
             <Text style={styles.doneMsg}>{successMsg}</Text>
             <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.goBack()}>
               <Text style={styles.primaryBtnText}>로그인 화면으로</Text>
@@ -220,7 +255,7 @@ export default function ForgotPasswordScreen({ navigation }) {
           </View>
         )}
 
-        {/* ── 이메일 탭 ── */}
+        {/* ── 이메일 탭 - STEP 1: 이메일 입력 ── */}
         {tab === 'email' && step === STEP.INPUT && (
           <View>
             <Text style={styles.label}>가입한 이메일 주소</Text>
@@ -237,86 +272,26 @@ export default function ForgotPasswordScreen({ navigation }) {
 
             <TouchableOpacity
               style={[styles.primaryBtn, loading && styles.btnDisabled]}
-              onPress={sendEmailReset}
+              onPress={sendEmailCode}
               disabled={loading}
             >
               {loading
                 ? <ActivityIndicator color="#fff" />
-                : <Text style={styles.primaryBtnText}>재설정 메일 보내기</Text>
+                : <Text style={styles.primaryBtnText}>인증 코드 받기</Text>
               }
             </TouchableOpacity>
 
             <View style={styles.infoBox}>
               <Text style={styles.infoText}>
-                📌 입력한 이메일로 비밀번호 재설정 링크가 발송됩니다.{'\n'}
-                스팸 메일함도 확인해보세요.
+                📌 입력한 이메일로 6자리 인증 코드가 발송됩니다.{'\n'}
+                스팸 메일함도 확인해보세요. (10분 유효)
               </Text>
             </View>
           </View>
         )}
 
-        {/* ── 전화번호 탭 - STEP 1 ── */}
-        {tab === 'phone' && step === STEP.INPUT && (
-          <View>
-            {Platform.OS !== 'web' && (
-              <View style={styles.nativeNoticeBox}>
-                <Text style={styles.nativeNoticeTitle}>📱 전화번호 인증 안내</Text>
-                <Text style={styles.nativeNoticeText}>
-                  전화번호 SMS 인증은 현재 Expo Go 환경에서 지원되지 않아요.{'\n\n'}
-                  아래 방법을 이용해 주세요:{'\n'}
-                  • <Text style={{ color: '#fff', fontWeight: 'bold' }}>이메일 탭</Text>에서 비밀번호 재설정 메일을 받거나{'\n'}
-                  • 앱을 정식 빌드(EAS Build) 후 사용하시면 전화번호 인증이 활성화됩니다.
-                </Text>
-                <TouchableOpacity
-                  style={styles.switchEmailBtn}
-                  onPress={() => switchTab('email')}
-                >
-                  <Text style={styles.switchEmailBtnText}>📧 이메일로 재설정하기</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {Platform.OS === 'web' && (
-              <>
-                <Text style={styles.label}>전화번호</Text>
-                <View style={styles.phoneRow}>
-                  <View style={styles.phonePrefix}>
-                    <Text style={styles.phonePrefixText}>🇰🇷 +82</Text>
-                  </View>
-                  <TextInput
-                    style={[styles.phoneInput, error ? styles.inputError : null]}
-                    placeholder="010-1234-5678"
-                    placeholderTextColor="#666"
-                    value={phone}
-                    onChangeText={t => { setPhone(t); setError(''); }}
-                    keyboardType="phone-pad"
-                  />
-                </View>
-                {error ? <Text style={styles.errorText}>⚠ {error}</Text> : null}
-
-                <TouchableOpacity
-                  style={[styles.primaryBtn, loading && styles.btnDisabled]}
-                  onPress={sendPhoneCode}
-                  disabled={loading}
-                >
-                  {loading
-                    ? <ActivityIndicator color="#fff" />
-                    : <Text style={styles.primaryBtnText}>인증 코드 받기</Text>
-                  }
-                </TouchableOpacity>
-
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    📌 가입 시 등록한 전화번호로 6자리 인증 코드가 발송됩니다.
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* ── 전화번호 탭 - STEP 2: OTP ── */}
-        {tab === 'phone' && step === STEP.CODE && (
+        {/* ── 이메일 탭 - STEP 2: 코드 입력 ── */}
+        {tab === 'email' && step === STEP.CODE && (
           <View>
             <View style={styles.stepIndicator}>
               <View style={[styles.stepDot, styles.stepDotDone]} />
@@ -328,7 +303,7 @@ export default function ForgotPasswordScreen({ navigation }) {
             <Text style={styles.stepLabel}>STEP 2 · 인증 코드 확인</Text>
 
             <Text style={styles.sentMsg}>
-              📱 {phone} 으로{'\n'}6자리 인증 코드를 발송했어요.
+              📧 {email.trim()}으로{'\n'}6자리 인증 코드를 발송했어요.
             </Text>
 
             <Text style={styles.label}>인증 코드 6자리</Text>
@@ -345,7 +320,134 @@ export default function ForgotPasswordScreen({ navigation }) {
 
             <TouchableOpacity
               style={[styles.primaryBtn, loading && styles.btnDisabled]}
-              onPress={verifyOtp}
+              onPress={verifyEmailCode}
+              disabled={loading}
+            >
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>코드 확인</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.resendBtn} onPress={resetAll}>
+              <Text style={styles.resendText}>코드를 받지 못했나요? 다시 요청</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── 이메일 탭 - STEP 3: 새 비밀번호 ── */}
+        {tab === 'email' && step === STEP.NEW_PW && (
+          <View>
+            <View style={styles.stepIndicator}>
+              <View style={[styles.stepDot, styles.stepDotDone]} />
+              <View style={[styles.stepLine, styles.stepLineDone]} />
+              <View style={[styles.stepDot, styles.stepDotDone]} />
+              <View style={styles.stepLine} />
+              <View style={[styles.stepDot, styles.stepDotActive]} />
+            </View>
+            <Text style={styles.stepLabel}>STEP 3 · 새 비밀번호 설정</Text>
+
+            <Text style={styles.label}>새 비밀번호</Text>
+            <TextInput
+              style={[styles.input, error ? styles.inputError : null]}
+              placeholder="6자 이상 입력해주세요"
+              placeholderTextColor="#666"
+              value={newPassword}
+              onChangeText={t => { setNewPassword(t); setError(''); }}
+              secureTextEntry
+            />
+            <Text style={styles.label}>새 비밀번호 확인</Text>
+            <TextInput
+              style={[styles.input, confirmPassword && newPassword !== confirmPassword ? styles.inputError : null]}
+              placeholder="비밀번호를 다시 입력해주세요"
+              placeholderTextColor="#666"
+              value={confirmPassword}
+              onChangeText={t => { setConfirmPassword(t); setError(''); }}
+              secureTextEntry
+            />
+            {confirmPassword && newPassword !== confirmPassword && (
+              <Text style={styles.errorText}>⚠ 비밀번호가 일치하지 않습니다.</Text>
+            )}
+            {error ? <Text style={styles.errorText}>⚠ {error}</Text> : null}
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={saveNewPassword}
+              disabled={loading}
+            >
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>비밀번호 변경하기</Text>}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── 전화번호 탭 - STEP 1: 전화번호 입력 ── */}
+        {tab === 'phone' && step === STEP.INPUT && (
+          <View>
+            <Text style={styles.label}>가입한 전화번호</Text>
+            <View style={styles.phoneRow}>
+              <View style={styles.phonePrefix}>
+                <Text style={styles.phonePrefixText}>🇰🇷 +82</Text>
+              </View>
+              <TextInput
+                style={[styles.phoneInput, error ? styles.inputError : null]}
+                placeholder="010-1234-5678"
+                placeholderTextColor="#666"
+                value={phone}
+                onChangeText={t => { setPhone(t); setError(''); }}
+                keyboardType="phone-pad"
+              />
+            </View>
+            {error ? <Text style={styles.errorText}>⚠ {error}</Text> : null}
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={sendPhoneCode}
+              disabled={loading}
+            >
+              {loading
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={styles.primaryBtnText}>인증 코드 받기</Text>
+              }
+            </TouchableOpacity>
+
+            <View style={styles.infoBox}>
+              <Text style={styles.infoText}>
+                📌 Firebase를 통해 SMS로 인증 코드가 발송됩니다.{'\n'}
+                등록한 전화번호로 인증 후 비밀번호를 재설정할 수 있어요. (10분 유효){'\n\n'}
+                전화번호 인증이 어려운 경우 이메일 탭을 이용해주세요.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ── 전화번호 탭 - STEP 2: 코드 입력 ── */}
+        {tab === 'phone' && step === STEP.CODE && (
+          <View>
+            <View style={styles.stepIndicator}>
+              <View style={[styles.stepDot, styles.stepDotDone]} />
+              <View style={styles.stepLine} />
+              <View style={[styles.stepDot, styles.stepDotActive]} />
+              <View style={styles.stepLine} />
+              <View style={styles.stepDot} />
+            </View>
+            <Text style={styles.stepLabel}>STEP 2 · 인증 코드 확인</Text>
+
+            <Text style={styles.sentMsg}>
+              📱 {phone}으로{'\n'}6자리 인증 코드를 발송했어요.
+            </Text>
+
+            <Text style={styles.label}>인증 코드 6자리</Text>
+            <TextInput
+              style={[styles.input, styles.otpInput, error ? styles.inputError : null]}
+              placeholder="000000"
+              placeholderTextColor="#666"
+              value={otp}
+              onChangeText={t => { setOtp(t.replace(/[^0-9]/g, '').slice(0, 6)); setError(''); }}
+              keyboardType="number-pad"
+              maxLength={6}
+            />
+            {error ? <Text style={styles.errorText}>⚠ {error}</Text> : null}
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              onPress={verifyPhoneCode}
               disabled={loading}
             >
               {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>코드 확인</Text>}
@@ -401,6 +503,7 @@ export default function ForgotPasswordScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         )}
+
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -454,18 +557,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(74,158,255,0.2)',
   },
   infoText: { color: '#4a9eff', fontSize: 12, lineHeight: 20 },
-
-  // 네이티브 안내 박스
-  nativeNoticeBox: {
-    backgroundColor: '#16213e', borderRadius: 14, padding: 20,
-    borderWidth: 1, borderColor: '#0f3460',
-  },
-  nativeNoticeTitle: { color: '#e94560', fontSize: 15, fontWeight: 'bold', marginBottom: 12 },
-  nativeNoticeText: { color: '#aaa', fontSize: 13, lineHeight: 22, marginBottom: 18 },
-  switchEmailBtn: {
-    backgroundColor: '#e94560', borderRadius: 12, padding: 14, alignItems: 'center',
-  },
-  switchEmailBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
 
   sentMsg: {
     color: '#aaa', fontSize: 14, lineHeight: 22, marginBottom: 20, textAlign: 'center',

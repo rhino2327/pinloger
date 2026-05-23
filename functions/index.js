@@ -448,3 +448,140 @@ exports.googlePlaceSearch = onCall({ secrets: ['GOOGLE_MAPS_API_KEY'] }, async (
     return { places: [] };
   }
 });
+
+// ──────────────────────────────────────────────
+// 이메일 인증 코드 발송 (purpose: 'signup' | 'reset')
+// ──────────────────────────────────────────────
+exports.sendEmailCode = onCall(
+  { secrets: ['GMAIL_USER', 'GMAIL_APP_PASSWORD'] },
+  async (request) => {
+    const { email, purpose } = request.data;
+    if (!email || !purpose) throw new HttpsError('invalid-argument', '이메일과 목적이 필요합니다.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      throw new HttpsError('invalid-argument', '올바른 이메일 형식이 아닙니다.');
+
+    try {
+      const existing = await admin.auth().getUserByEmail(email);
+      if (purpose === 'signup')
+        throw new HttpsError('already-exists', '이미 사용 중인 이메일입니다.');
+    } catch (e) {
+      if (e.code === 'already-exists') throw e;
+      if (e.code !== 'auth/user-not-found' && purpose === 'reset')
+        throw new HttpsError('not-found', '등록되지 않은 이메일입니다.');
+    }
+
+    // rate limit: 1분에 1회
+    const db = admin.firestore();
+    const docRef = db.collection('verificationCodes').doc(`email_${email}`);
+    const existing2 = await docRef.get();
+    if (existing2.exists) {
+      const created = existing2.data()?.createdAt?.toDate();
+      if (created && Date.now() - created.getTime() < 60000)
+        throw new HttpsError('resource-exhausted', '1분 후 다시 요청해주세요.');
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await docRef.set({
+      type: 'email', target: email, code, purpose,
+      expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+      used: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+    });
+
+    const subject = purpose === 'signup' ? '[PINLOGER] 이메일 인증 코드' : '[PINLOGER] 비밀번호 재설정 코드';
+    await transporter.sendMail({
+      from: `PINLOGER <${process.env.GMAIL_USER}>`,
+      to: email,
+      subject,
+      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;background:#1a1a2e;color:#fff;padding:32px;border-radius:12px"><h2 style="color:#e94560">📍 PINLOGER</h2><p style="color:#aaa">아래 6자리 코드를 앱에 입력해주세요. 10분 내에 사용하세요.</p><div style="background:#16213e;border-radius:12px;padding:24px;text-align:center;margin:20px 0;border:1px solid #0f3460"><span style="font-size:36px;font-weight:bold;letter-spacing:12px;color:#e94560">${code}</span></div><p style="color:#666;font-size:13px">본인이 요청하지 않은 경우 무시하세요.</p></div>`,
+    });
+
+    return { success: true };
+  }
+);
+
+// ──────────────────────────────────────────────
+// 이메일 코드 확인
+// ──────────────────────────────────────────────
+exports.verifyEmailCode = onCall({}, async (request) => {
+  const { email, code } = request.data;
+  if (!email || !code) throw new HttpsError('invalid-argument', '이메일과 코드가 필요합니다.');
+
+  const db = admin.firestore();
+  const docRef = db.collection('verificationCodes').doc(`email_${email}`);
+  const snap = await docRef.get();
+
+  if (!snap.exists) throw new HttpsError('not-found', '인증 코드를 찾을 수 없어요. 다시 요청해주세요.');
+  const data = snap.data();
+  if (data.used) throw new HttpsError('failed-precondition', '이미 사용된 코드입니다. 다시 요청해주세요.');
+  if (data.expiresAt.toDate() < new Date()) throw new HttpsError('deadline-exceeded', '코드가 만료됐어요. 다시 요청해주세요.');
+  if (data.code !== code.trim()) throw new HttpsError('unauthenticated', '인증 코드가 올바르지 않아요.');
+
+  await docRef.update({ used: true });
+  return { success: true, purpose: data.purpose };
+});
+
+// ──────────────────────────────────────────────
+// 코드 인증 후 비밀번호 재설정 (Admin)
+// ──────────────────────────────────────────────
+exports.resetPasswordWithCode = onCall({}, async (request) => {
+  const { target, type, code, newPassword } = request.data;
+  if (!target || !type || !code || !newPassword)
+    throw new HttpsError('invalid-argument', '모든 항목이 필요합니다.');
+  if (newPassword.length < 6)
+    throw new HttpsError('invalid-argument', '비밀번호는 6자 이상이어야 합니다.');
+
+  const db = admin.firestore();
+  const docKey = `email_${target}`;
+  const snap = await db.collection('verificationCodes').doc(docKey).get();
+
+  if (!snap.exists) throw new HttpsError('not-found', '인증 코드를 찾을 수 없어요.');
+  const data = snap.data();
+  if (data.used) throw new HttpsError('failed-precondition', '이미 사용된 코드입니다.');
+  if (data.expiresAt.toDate() < new Date()) throw new HttpsError('deadline-exceeded', '코드가 만료됐어요.');
+  if (data.code !== code.trim()) throw new HttpsError('unauthenticated', '인증 코드가 올바르지 않아요.');
+
+  const userRecord = await admin.auth().getUserByEmail(target).catch(() => null);
+  if (!userRecord) throw new HttpsError('not-found', '등록된 계정을 찾을 수 없어요.');
+  const uid = userRecord.uid;
+
+  await admin.auth().updateUser(uid, { password: newPassword });
+  await db.collection('verificationCodes').doc(docKey).update({ used: true });
+  return { success: true };
+});
+
+// ──────────────────────────────────────────────
+// 닉네임/전화번호 중복 체크
+// ──────────────────────────────────────────────
+exports.checkAvailability = onCall({}, async (request) => {
+  const { type, value } = request.data;
+  if (!type || !value) throw new HttpsError('invalid-argument', 'type과 value가 필요합니다.');
+
+  const db = admin.firestore();
+  const uid = request.auth?.uid;
+
+  if (type === 'nickname') {
+    const snap = await db.collection('users').where('nickname', '==', value.trim()).limit(2).get();
+    const others = snap.docs.filter(d => d.id !== uid);
+    return { available: others.length === 0 };
+  }
+
+  if (type === 'phone') {
+    let normalized = value.trim().replace(/[\s\-()]/g, '');
+    if (normalized.startsWith('0')) normalized = '+82' + normalized.slice(1);
+    else if (!normalized.startsWith('+')) normalized = '+82' + normalized;
+    const snap = await db.collection('users').where('phone', '==', normalized).limit(2).get();
+    const others = snap.docs.filter(d => d.id !== uid);
+    return { available: others.length === 0 };
+  }
+
+  throw new HttpsError('invalid-argument', '지원하지 않는 type입니다.');
+});

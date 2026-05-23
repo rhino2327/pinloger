@@ -10,11 +10,12 @@ import {
   GoogleAuthProvider, signInWithCredential, signInWithCustomToken,
   signInWithPopup,
 } from 'firebase/auth';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable, getFunctions } from 'firebase/functions';
+import { doc, setDoc } from 'firebase/firestore';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import * as AuthSession from 'expo-auth-session';
-import { auth, functions } from '../config/firebase';
+import { auth, functions, db } from '../config/firebase';
 import { GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID, EXPO_USERNAME } from '../config/socialAuth';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -76,21 +77,23 @@ const kStyles = StyleSheet.create({
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  const [signupStep, setSignupStep] = useState('form'); // 'form' | 'verify'
+  const [verifyCode, setVerifyCode] = useState('');
+  const [verifyLoading, setVerifyLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [fieldErrors, setFieldErrors] = useState({ email: '', password: '' });
+  const [fieldErrors, setFieldErrors] = useState({ email: '', password: '', nickname: '' });
 
   // Expo Go + 프로덕션 빌드 공통 redirect URI
-  // Google Cloud Console: https://auth.expo.io/@rhino2327/TravelApp 등록됨
-  // 카카오 개발자 콘솔: 동일 URI 등록 필요
   const redirectUri = `https://auth.expo.io/@${EXPO_USERNAME}/TravelApp`;
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: GOOGLE_WEB_CLIENT_ID,           // Expo Go fallback
+    clientId: GOOGLE_WEB_CLIENT_ID,
     webClientId: GOOGLE_WEB_CLIENT_ID,
-    iosClientId: GOOGLE_IOS_CLIENT_ID,        // iOS 네이티브 빌드용
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID,  // Android 네이티브 빌드용
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
     redirectUri,
   });
 
@@ -108,11 +111,11 @@ export default function LoginScreen({ navigation }) {
 
   const clearErrors = () => {
     setErrorMsg('');
-    setFieldErrors({ email: '', password: '' });
+    setFieldErrors({ email: '', password: '', nickname: '' });
   };
 
   const validate = () => {
-    const errs = { email: '', password: '' };
+    const errs = { email: '', password: '', nickname: '' };
     let valid = true;
     if (!email.trim()) { errs.email = '이메일을 입력해주세요.'; valid = false; }
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -121,6 +124,11 @@ export default function LoginScreen({ navigation }) {
     if (!password) { errs.password = '비밀번호를 입력해주세요.'; valid = false; }
     else if (isSignUp && password.length < 6) {
       errs.password = '비밀번호는 6자 이상이어야 합니다.'; valid = false;
+    }
+    if (isSignUp) {
+      if (!nickname.trim()) { errs.nickname = '닉네임을 입력해주세요.'; valid = false; }
+      else if (nickname.trim().length < 2) { errs.nickname = '닉네임은 2자 이상이어야 합니다.'; valid = false; }
+      else if (nickname.trim().length > 12) { errs.nickname = '닉네임은 12자 이하여야 합니다.'; valid = false; }
     }
     setFieldErrors(errs);
     return valid;
@@ -133,21 +141,103 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
     try {
       if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email.trim(), password);
+        // 닉네임 중복 체크
+        const checkFn = httpsCallable(functions, 'checkAvailability');
+        const { data: checkData } = await checkFn({ type: 'nickname', value: nickname.trim() });
+        if (!checkData.available) {
+          setFieldErrors(prev => ({ ...prev, nickname: '이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해주세요.' }));
+          setLoading(false);
+          return;
+        }
+
+        // 이메일 인증 코드 발송
+        const sendCodeFn = httpsCallable(functions, 'sendEmailCode');
+        await sendCodeFn({ email: email.trim(), purpose: 'signup' });
+        setSignupStep('verify');
       } else {
         await signInWithEmailAndPassword(auth, email.trim(), password);
       }
     } catch (error) {
-      const msg = AUTH_ERRORS[error.code] || '오류가 발생했어요. 다시 시도해주세요.';
-      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        setFieldErrors(prev => ({ ...prev, password: msg }));
-      } else if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-email') {
-        setFieldErrors(prev => ({ ...prev, email: msg }));
+      // Cloud Function 에러 처리
+      if (error.code === 'functions/already-exists') {
+        setFieldErrors(prev => ({ ...prev, email: '이미 사용 중인 이메일입니다.' }));
+      } else if (error.code === 'functions/resource-exhausted') {
+        setErrorMsg('1분 후 다시 요청해주세요.');
       } else {
-        setErrorMsg(msg);
+        const msg = AUTH_ERRORS[error.code] || error.message || '오류가 발생했어요. 다시 시도해주세요.';
+        if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+          setFieldErrors(prev => ({ ...prev, password: msg }));
+        } else if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-email') {
+          setFieldErrors(prev => ({ ...prev, email: msg }));
+        } else {
+          setErrorMsg(msg);
+        }
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerifyAndSignup = async () => {
+    clearErrors();
+    if (!verifyCode.trim() || verifyCode.trim().length < 6) {
+      setErrorMsg('6자리 인증 코드를 입력해주세요.');
+      return;
+    }
+
+    setVerifyLoading(true);
+    try {
+      // 이메일 코드 확인
+      const verifyFn = httpsCallable(functions, 'verifyEmailCode');
+      await verifyFn({ email: email.trim(), code: verifyCode.trim() });
+
+      // 계정 생성
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const uid = userCredential.user.uid;
+
+      // Firestore에 닉네임 저장
+      await setDoc(doc(db, 'users', uid), {
+        nickname: nickname.trim(),
+        email: email.trim(),
+        provider: 'password',
+        avatar: '✈️',
+        createdAt: new Date(),
+      }, { merge: true });
+
+    } catch (error) {
+      if (error.code === 'functions/not-found') {
+        setErrorMsg('인증 코드를 찾을 수 없어요. 다시 요청해주세요.');
+      } else if (error.code === 'functions/failed-precondition') {
+        setErrorMsg('이미 사용된 코드입니다. 다시 요청해주세요.');
+      } else if (error.code === 'functions/deadline-exceeded') {
+        setErrorMsg('코드가 만료됐어요. 다시 요청해주세요.');
+      } else if (error.code === 'functions/unauthenticated') {
+        setErrorMsg('인증 코드가 올바르지 않아요.');
+      } else {
+        const msg = AUTH_ERRORS[error.code] || error.message || '오류가 발생했어요. 다시 시도해주세요.';
+        setErrorMsg(msg);
+      }
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    clearErrors();
+    setVerifyLoading(true);
+    try {
+      const sendCodeFn = httpsCallable(functions, 'sendEmailCode');
+      await sendCodeFn({ email: email.trim(), purpose: 'signup' });
+      setErrorMsg('');
+      setVerifyCode('');
+    } catch (error) {
+      if (error.code === 'functions/resource-exhausted') {
+        setErrorMsg('1분 후 다시 요청해주세요.');
+      } else {
+        setErrorMsg('코드 재발송에 실패했어요. 잠시 후 다시 시도해주세요.');
+      }
+    } finally {
+      setVerifyLoading(false);
     }
   };
 
@@ -156,7 +246,6 @@ export default function LoginScreen({ navigation }) {
     clearErrors();
     setLoading(true);
     try {
-      // 카카오 인가 URL — client_id는 인가 URL 구성에만 사용 (토큰 교환은 서버에서)
       const KAKAO_CLIENT_ID = 'a3d59f0ee5ce613e9e2c7b77ca7fbc04';
       const kakaoAuthUrl =
         `https://kauth.kakao.com/oauth/authorize` +
@@ -171,7 +260,6 @@ export default function LoginScreen({ navigation }) {
         return;
       }
 
-      // URL에서 code 파싱
       const urlParts = result.url.split('?');
       if (urlParts.length < 2) throw new Error('code not found');
       const params = {};
@@ -182,11 +270,9 @@ export default function LoginScreen({ navigation }) {
       const code = params.code;
       if (!code) throw new Error('code not found');
 
-      // Cloud Function 호출 — API 키는 서버에서만 사용
       const kakaoLoginFn = httpsCallable(functions, 'kakaoLogin');
       const { data } = await kakaoLoginFn({ code, redirectUri });
 
-      // Firebase Custom Token으로 로그인
       await signInWithCustomToken(auth, data.customToken);
     } catch (err) {
       setErrorMsg('카카오 로그인 중 오류가 발생했어요. 다시 시도해주세요.');
@@ -196,9 +282,8 @@ export default function LoginScreen({ navigation }) {
   };
 
   const isGoogleEnabled = GOOGLE_WEB_CLIENT_ID !== 'YOUR_GOOGLE_WEB_CLIENT_ID';
-  const isKakaoEnabled = Platform.OS !== 'web'; // 카카오는 네이티브 전용
+  const isKakaoEnabled = Platform.OS !== 'web';
 
-  // 웹: Firebase signInWithPopup / 네이티브: expo-auth-session
   const handleGoogleLogin = async () => {
     clearErrors();
     if (Platform.OS === 'web') {
@@ -222,6 +307,83 @@ export default function LoginScreen({ navigation }) {
     }
   };
 
+  // ── 이메일 인증 화면 (회원가입 2단계) ──────────────────────────
+  if (isSignUp && signupStep === 'verify') {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+        <ScrollView
+          contentContainerStyle={styles.inner}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.logo}>📍 PINLOGER</Text>
+          <Text style={styles.subtitle}>이메일 인증</Text>
+
+          <View style={styles.verifyInfoBox}>
+            <Text style={styles.verifyInfoText}>
+              📧 {email.trim()}로{'\n'}인증 코드를 보냈어요.{'\n'}메일함을 확인해주세요. (10분 유효)
+            </Text>
+          </View>
+
+          <TextInput
+            style={[styles.input, styles.codeInput, errorMsg ? styles.inputError : null]}
+            placeholder="000000"
+            placeholderTextColor="#555"
+            value={verifyCode}
+            onChangeText={t => { setVerifyCode(t.replace(/[^0-9]/g, '').slice(0, 6)); setErrorMsg(''); }}
+            keyboardType="number-pad"
+            maxLength={6}
+            autoFocus
+          />
+
+          {errorMsg ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorBoxText}>⚠ {errorMsg}</Text>
+            </View>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.button, verifyLoading && styles.buttonDisabled]}
+            onPress={handleVerifyAndSignup}
+            disabled={verifyLoading}
+          >
+            {verifyLoading
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.buttonText}>인증하고 가입하기</Text>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => {
+              setSignupStep('form');
+              setVerifyCode('');
+              clearErrors();
+            }}
+          >
+            <Text style={styles.backBtnText}>← 뒤로</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.resendBtn}
+            onPress={handleResendCode}
+            disabled={verifyLoading}
+          >
+            <Text style={styles.resendBtnText}>코드 재발송</Text>
+          </TouchableOpacity>
+
+        </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── 기본 로그인/회원가입 폼 ──────────────────────────────────
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
@@ -251,6 +413,24 @@ export default function LoginScreen({ navigation }) {
           <Text style={styles.fieldErrorText}>⚠ {fieldErrors.email}</Text>
         ) : null}
 
+        {/* 회원가입 시 닉네임 입력 */}
+        {isSignUp && (
+          <>
+            <TextInput
+              style={[styles.input, fieldErrors.nickname ? styles.inputError : null]}
+              placeholder="닉네임 (2~12자)"
+              placeholderTextColor="#aaa"
+              value={nickname}
+              onChangeText={t => { setNickname(t); setFieldErrors(p => ({ ...p, nickname: '' })); setErrorMsg(''); }}
+              autoCapitalize="none"
+              maxLength={12}
+            />
+            {fieldErrors.nickname ? (
+              <Text style={styles.fieldErrorText}>⚠ {fieldErrors.nickname}</Text>
+            ) : null}
+          </>
+        )}
+
         {/* 비밀번호 입력 */}
         <TextInput
           style={[styles.input, fieldErrors.password ? styles.inputError : null]}
@@ -279,11 +459,17 @@ export default function LoginScreen({ navigation }) {
         >
           {loading
             ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.buttonText}>{isSignUp ? '회원가입' : '로그인'}</Text>
+            : <Text style={styles.buttonText}>{isSignUp ? '인증 메일 받기' : '로그인'}</Text>
           }
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => { setIsSignUp(!isSignUp); clearErrors(); }}>
+        <TouchableOpacity onPress={() => {
+          setIsSignUp(!isSignUp);
+          setSignupStep('form');
+          setVerifyCode('');
+          setNickname('');
+          clearErrors();
+        }}>
           <Text style={styles.toggleText}>
             {isSignUp ? '이미 계정이 있으신가요? 로그인' : '계정이 없으신가요? 회원가입'}
           </Text>
@@ -346,6 +532,10 @@ const styles = StyleSheet.create({
   inputError: {
     borderColor: '#e94560', borderWidth: 1.5,
   },
+  codeInput: {
+    textAlign: 'center', fontSize: 32, fontWeight: 'bold',
+    letterSpacing: 12, color: '#e94560', marginBottom: 16,
+  },
   fieldErrorText: {
     color: '#e94560', fontSize: 12, marginBottom: 10, marginLeft: 4,
   },
@@ -389,4 +579,17 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   kakaoBtnText: { color: '#3C1E1E', fontSize: 16, fontWeight: 'bold' },
+
+  // 이메일 인증 화면 전용
+  verifyInfoBox: {
+    backgroundColor: '#16213e', borderRadius: 12, padding: 20,
+    borderWidth: 1, borderColor: '#0f3460', marginBottom: 24,
+  },
+  verifyInfoText: {
+    color: '#aaa', fontSize: 14, lineHeight: 22, textAlign: 'center',
+  },
+  backBtn: { alignItems: 'center', marginBottom: 14 },
+  backBtnText: { color: '#aaa', fontSize: 14 },
+  resendBtn: { alignItems: 'center', paddingVertical: 8 },
+  resendBtnText: { color: '#4a9eff', fontSize: 13 },
 });

@@ -11,6 +11,11 @@ import {
 import { db, auth } from '../config/firebase';
 import { generateInviteCode } from '../utils/helpers';
 import { TRANSPORTS } from '../utils/transport';
+import ScrollPicker from '../components/ScrollPicker';
+
+const YEARS  = Array.from({ length: 5 }, (_, i) => String(2024 + i));
+const MONTHS = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+const DAYS   = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
 function getTripDays(startDate, endDate) {
   if (!startDate || !endDate) return [];
@@ -63,6 +68,14 @@ export default function CommunityTripDetailScreen({ route }) {
   const [newTripDest, setNewTripDest] = useState('');
   const [copying, setCopying] = useState(false);
 
+  const now = new Date();
+  const [newStartYear,  setNewStartYear]  = useState(String(now.getFullYear()));
+  const [newStartMonth, setNewStartMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
+  const [newStartDay,   setNewStartDay]   = useState(String(now.getDate()).padStart(2, '0'));
+  const [newEndYear,    setNewEndYear]    = useState(String(now.getFullYear()));
+  const [newEndMonth,   setNewEndMonth]   = useState(String(now.getMonth() + 1).padStart(2, '0'));
+  const [newEndDay,     setNewEndDay]     = useState(String(now.getDate()).padStart(2, '0'));
+
   const tripDays = getTripDays(trip.startDate, trip.endDate);
 
   useEffect(() => {
@@ -113,8 +126,23 @@ export default function CommunityTripDetailScreen({ route }) {
     setSelectedIds(new Set());
     setCopyStep(1);
     setCopyMode(null);
-    setNewTripName(`${trip.name} (복사본)`);
+    setNewTripName(trip.name);
     setNewTripDest(trip.destination || '');
+
+    // 커뮤니티 여행의 날짜로 기본값 초기화
+    const parsePart = (dateStr, part) => {
+      if (!dateStr || dateStr.length < 10) return null;
+      if (part === 'y') return dateStr.slice(0, 4);
+      if (part === 'm') return dateStr.slice(5, 7);
+      return dateStr.slice(8, 10);
+    };
+    const sd = trip.startDate, ed = trip.endDate;
+    setNewStartYear(parsePart(sd, 'y') || String(now.getFullYear()));
+    setNewStartMonth(parsePart(sd, 'm') || String(now.getMonth() + 1).padStart(2, '0'));
+    setNewStartDay(parsePart(sd, 'd') || String(now.getDate()).padStart(2, '0'));
+    setNewEndYear(parsePart(ed, 'y') || String(now.getFullYear()));
+    setNewEndMonth(parsePart(ed, 'm') || String(now.getMonth() + 1).padStart(2, '0'));
+    setNewEndDay(parsePart(ed, 'd') || String(now.getDate()).padStart(2, '0'));
     try {
       const q = query(collection(db, 'trips'), where('members', 'array-contains', user.uid));
       const snap = await getDocs(q);
@@ -134,11 +162,17 @@ export default function CommunityTripDetailScreen({ route }) {
 
   const handleCopyToNew = async () => {
     if (!newTripName.trim()) { Alert.alert('알림', '여행 이름을 입력해주세요.'); return; }
+    const startDate = `${newStartYear}-${newStartMonth}-${newStartDay}`;
+    const endDate   = `${newEndYear}-${newEndMonth}-${newEndDay}`;
+    if (startDate > endDate) { Alert.alert('알림', '종료일이 시작일보다 빠를 수 없어요.'); return; }
     setCopying(true);
     try {
       const newTripRef = await addDoc(collection(db, 'trips'), {
         name: newTripName.trim(),
         destination: newTripDest.trim(),
+        flag: trip.flag || '🌍',
+        startDate,
+        endDate,
         ownerId: user.uid,
         members: [user.uid],
         memberRoles: { [user.uid]: 'owner' },
@@ -417,7 +451,7 @@ export default function CommunityTripDetailScreen({ route }) {
                 </View>
 
                 {copyMode === 'new' && (
-                  <View>
+                  <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                     <TextInput
                       style={styles.formInput}
                       placeholder="여행 이름"
@@ -432,6 +466,24 @@ export default function CommunityTripDetailScreen({ route }) {
                       value={newTripDest}
                       onChangeText={setNewTripDest}
                     />
+                    <Text style={styles.dateLabel}>시작일</Text>
+                    <View style={styles.pickerRow}>
+                      <ScrollPicker items={YEARS}  selectedValue={newStartYear}  onValueChange={setNewStartYear}  width={72} />
+                      <Text style={styles.pickerSep}>년</Text>
+                      <ScrollPicker items={MONTHS} selectedValue={newStartMonth} onValueChange={setNewStartMonth} width={52} />
+                      <Text style={styles.pickerSep}>월</Text>
+                      <ScrollPicker items={DAYS}   selectedValue={newStartDay}   onValueChange={setNewStartDay}   width={52} />
+                      <Text style={styles.pickerSep}>일</Text>
+                    </View>
+                    <Text style={styles.dateLabel}>종료일</Text>
+                    <View style={styles.pickerRow}>
+                      <ScrollPicker items={YEARS}  selectedValue={newEndYear}  onValueChange={setNewEndYear}  width={72} />
+                      <Text style={styles.pickerSep}>년</Text>
+                      <ScrollPicker items={MONTHS} selectedValue={newEndMonth} onValueChange={setNewEndMonth} width={52} />
+                      <Text style={styles.pickerSep}>월</Text>
+                      <ScrollPicker items={DAYS}   selectedValue={newEndDay}   onValueChange={setNewEndDay}   width={52} />
+                      <Text style={styles.pickerSep}>일</Text>
+                    </View>
                     <TouchableOpacity
                       style={[styles.confirmBtn, copying && styles.confirmBtnDisabled]}
                       onPress={handleCopyToNew}
@@ -442,7 +494,7 @@ export default function CommunityTripDetailScreen({ route }) {
                         : <Text style={styles.confirmBtnText}>새 여행으로 복사</Text>
                       }
                     </TouchableOpacity>
-                  </View>
+                  </ScrollView>
                 )}
 
                 {copyMode === 'existing' && (
@@ -450,24 +502,32 @@ export default function CommunityTripDetailScreen({ route }) {
                     {myTrips.length === 0 ? (
                       <Text style={styles.noTripsText}>추가할 수 있는 여행이 없어요</Text>
                     ) : (
-                      myTrips.map(t => (
-                        <TouchableOpacity
-                          key={t.id}
-                          style={styles.myTripItem}
-                          onPress={() => !copying && handleCopyToExisting(t)}
-                          disabled={copying}
-                        >
-                          <Text style={styles.myTripFlag}>{t.flag || '🌍'}</Text>
-                          <View style={styles.myTripInfo}>
-                            <Text style={styles.myTripName}>{t.name}</Text>
-                            <Text style={styles.myTripDest}>📍 {t.destination}</Text>
-                          </View>
-                          {copying
-                            ? <ActivityIndicator size="small" color="#e94560" />
-                            : <Text style={styles.myTripArrow}>›</Text>
-                          }
-                        </TouchableOpacity>
-                      ))
+                      myTrips.map(t => {
+                        const compatible = !trip.flag || trip.flag === '🌍' || !t.flag || t.flag === '🌍' || t.flag === trip.flag;
+                        return (
+                          <TouchableOpacity
+                            key={t.id}
+                            style={[styles.myTripItem, !compatible && styles.myTripItemDisabled]}
+                            onPress={() => !copying && compatible && handleCopyToExisting(t)}
+                            disabled={copying || !compatible}
+                            activeOpacity={compatible ? 0.75 : 1}
+                          >
+                            <Text style={styles.myTripFlag}>{t.flag || '🌍'}</Text>
+                            <View style={styles.myTripInfo}>
+                              <Text style={[styles.myTripName, !compatible && styles.myTripTextDisabled]}>{t.name}</Text>
+                              <Text style={[styles.myTripDest, !compatible && styles.myTripTextDisabled]}>📍 {t.destination}</Text>
+                              {!compatible && (
+                                <Text style={styles.myTripMismatch}>나라가 달라 추가할 수 없어요</Text>
+                              )}
+                            </View>
+                            {compatible && (
+                              copying
+                                ? <ActivityIndicator size="small" color="#e94560" />
+                                : <Text style={styles.myTripArrow}>›</Text>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })
                     )}
                   </ScrollView>
                 )}
@@ -640,6 +700,12 @@ const styles = StyleSheet.create({
     borderRadius: 10, marginBottom: 10, fontSize: 15,
     borderWidth: 1, borderColor: '#0f3460',
   },
+  dateLabel: { color: '#aaa', fontSize: 13, marginBottom: 8 },
+  pickerRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#1a1a2e', borderRadius: 12, padding: 8, marginBottom: 14,
+  },
+  pickerSep: { color: '#aaa', fontSize: 14, marginHorizontal: 4 },
   confirmBtn: {
     backgroundColor: '#4a9eff', padding: 14, borderRadius: 12,
     alignItems: 'center', marginTop: 4,
@@ -658,5 +724,8 @@ const styles = StyleSheet.create({
   myTripName: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
   myTripDest: { color: '#aaa', fontSize: 12 },
   myTripArrow: { color: '#aaa', fontSize: 24 },
+  myTripItemDisabled: { opacity: 0.4 },
+  myTripTextDisabled: { color: '#666' },
+  myTripMismatch: { color: '#e94560', fontSize: 11, marginTop: 2 },
   noTripsText: { color: '#555', textAlign: 'center', marginTop: 20, fontSize: 14 },
 });

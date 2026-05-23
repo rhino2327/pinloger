@@ -19,12 +19,17 @@
   "hosting": {
     "site": "pinloger",
     "public": "dist",
+    "predeploy": ["cp web-static/privacy.html dist/privacy.html"],
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/privacy",
+        "destination": "/privacy.html"
+      },
       {
         "source": "**",
         "destination": "/index.html"
