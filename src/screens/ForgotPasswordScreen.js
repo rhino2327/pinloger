@@ -7,8 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { httpsCallable } from 'firebase/functions';
 import { signInWithPhoneNumber, updatePassword } from 'firebase/auth';
-import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
-import { auth, app, functions } from '../config/firebase';
+import { auth, functions } from '../config/firebase';
 
 const STEP = {
   INPUT: 'input',
@@ -32,7 +31,18 @@ export default function ForgotPasswordScreen({ navigation }) {
 
   // 전화번호 인증 (Firebase Phone Auth)
   const [confirmationResult, setConfirmationResult] = useState(null);
-  const recaptchaVerifier = useRef(null);
+  const recaptchaVerifierRef = useRef(null);
+
+  // 웹용 RecaptchaVerifier 생성
+  const getRecaptchaVerifier = () => {
+    if (Platform.OS !== 'web') return null;
+    const { RecaptchaVerifier } = require('firebase/auth');
+    if (recaptchaVerifierRef.current) return recaptchaVerifierRef.current;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
+    return recaptchaVerifierRef.current;
+  };
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -104,15 +114,20 @@ export default function ForgotPasswordScreen({ navigation }) {
     }
   };
 
-  // ── 전화: 인증 코드 발송 (Firebase Phone Auth) ─────────────
+  // ── 전화: 인증 코드 발송 (Firebase Phone Auth — 웹 전용) ────
   const sendPhoneCode = async () => {
     clearState();
     const trimmed = phone.trim();
     if (!trimmed) { setError('전화번호를 입력해주세요.'); return; }
+    if (Platform.OS !== 'web') {
+      setError('전화번호 인증은 앱 업데이트 준비 중입니다.\n이메일 탭을 이용해주세요.');
+      return;
+    }
     const normalized = normalizePhone(trimmed);
     setLoading(true);
     try {
-      const result = await signInWithPhoneNumber(auth, normalized, recaptchaVerifier.current);
+      const verifier = getRecaptchaVerifier();
+      const result = await signInWithPhoneNumber(auth, normalized, verifier);
       setConfirmationResult(result);
       setStep(STEP.CODE);
     } catch (e) {
@@ -201,11 +216,6 @@ export default function ForgotPasswordScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifier}
-        firebaseConfig={app.options}
-        attemptInvisibleVerification={true}
-      />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

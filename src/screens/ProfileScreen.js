@@ -11,8 +11,7 @@ import {
   PhoneAuthProvider, updatePhoneNumber,
 } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
-import { auth, app, db } from '../config/firebase';
+import { auth, db } from '../config/firebase';
 import { useUserProfile } from '../hooks/useUserProfile';
 
 const AVATARS = [
@@ -44,7 +43,8 @@ export default function ProfileScreen({ navigation }) {
   const [phoneLoading, setPhoneLoading] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [verificationId, setVerificationId] = useState(null);
-  const recaptchaVerifier = useRef(null);
+  // 웹에서만 RecaptchaVerifier 사용 (네이티브는 향후 지원 예정)
+  const recaptchaVerifierRef = useRef(null);
 
   const normalizePhone = (raw) => {
     let n = raw.trim().replace(/[\s\-()]/g, '');
@@ -145,16 +145,32 @@ export default function ProfileScreen({ navigation }) {
     );
   };
 
-  // 휴대폰 인증 코드 발송 (Firebase Phone Auth)
+  // 웹용 RecaptchaVerifier 생성
+  const getRecaptchaVerifier = () => {
+    if (Platform.OS !== 'web') return null;
+    const { RecaptchaVerifier } = require('firebase/auth');
+    if (recaptchaVerifierRef.current) return recaptchaVerifierRef.current;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
+    return recaptchaVerifierRef.current;
+  };
+
+  // 휴대폰 인증 코드 발송 (Firebase Phone Auth — 웹 전용, 앱은 향후 지원)
   const handleSendPhoneCode = async () => {
     setPhoneError('');
     const trimmed = phone.trim();
     if (!trimmed) { setPhoneError('전화번호를 입력해주세요.'); return; }
+    if (Platform.OS !== 'web') {
+      setPhoneError('휴대폰 인증은 현재 앱 업데이트 준비 중입니다.\nweb.pinloger.web.app 에서 이용해주세요.');
+      return;
+    }
     const normalized = normalizePhone(trimmed);
     setPhoneLoading(true);
     try {
+      const verifier = getRecaptchaVerifier();
       const provider = new PhoneAuthProvider(auth);
-      const vid = await provider.verifyPhoneNumber(normalized, recaptchaVerifier.current);
+      const vid = await provider.verifyPhoneNumber(normalized, verifier);
       setVerificationId(vid);
       setPhoneStep('verify');
     } catch (error) {
@@ -223,11 +239,6 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <View style={{ flex: 1 }}>
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifier}
-        firebaseConfig={app.options}
-        attemptInvisibleVerification={true}
-      />
       <ScrollView style={styles.container} contentContainerStyle={styles.scroll}>
       {/* 프로필 카드 */}
       <View style={styles.profileCard}>
