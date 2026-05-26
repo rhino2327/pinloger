@@ -79,9 +79,6 @@ export default function LoginScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
-  const [signupStep, setSignupStep] = useState('form'); // 'form' | 'verify'
-  const [verifyCode, setVerifyCode] = useState('');
-  const [verifyLoading, setVerifyLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [fieldErrors, setFieldErrors] = useState({ email: '', password: '', nickname: '' });
@@ -149,95 +146,30 @@ export default function LoginScreen({ navigation }) {
           setLoading(false);
           return;
         }
-
-        // 이메일 인증 코드 발송
-        const sendCodeFn = httpsCallable(functions, 'sendEmailCode');
-        await sendCodeFn({ email: email.trim(), purpose: 'signup' });
-        setSignupStep('verify');
+        // 바로 계정 생성
+        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        const uid = userCredential.user.uid;
+        await setDoc(doc(db, 'users', uid), {
+          nickname: nickname.trim(),
+          email: email.trim(),
+          provider: 'password',
+          avatar: '✈️',
+          createdAt: new Date(),
+        }, { merge: true });
       } else {
         await signInWithEmailAndPassword(auth, email.trim(), password);
       }
     } catch (error) {
-      // Cloud Function 에러 처리
-      if (error.code === 'functions/already-exists') {
-        setFieldErrors(prev => ({ ...prev, email: '이미 사용 중인 이메일입니다.' }));
-      } else if (error.code === 'functions/resource-exhausted') {
-        setErrorMsg('1분 후 다시 요청해주세요.');
+      const msg = AUTH_ERRORS[error.code] || error.message || '오류가 발생했어요. 다시 시도해주세요.';
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        setFieldErrors(prev => ({ ...prev, password: msg }));
+      } else if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-email') {
+        setFieldErrors(prev => ({ ...prev, email: msg }));
       } else {
-        const msg = AUTH_ERRORS[error.code] || error.message || '오류가 발생했어요. 다시 시도해주세요.';
-        if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-          setFieldErrors(prev => ({ ...prev, password: msg }));
-        } else if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-email') {
-          setFieldErrors(prev => ({ ...prev, email: msg }));
-        } else {
-          setErrorMsg(msg);
-        }
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyAndSignup = async () => {
-    clearErrors();
-    if (!verifyCode.trim() || verifyCode.trim().length < 6) {
-      setErrorMsg('6자리 인증 코드를 입력해주세요.');
-      return;
-    }
-
-    setVerifyLoading(true);
-    try {
-      // 이메일 코드 확인
-      const verifyFn = httpsCallable(functions, 'verifyEmailCode');
-      await verifyFn({ email: email.trim(), code: verifyCode.trim() });
-
-      // 계정 생성
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const uid = userCredential.user.uid;
-
-      // Firestore에 닉네임 저장
-      await setDoc(doc(db, 'users', uid), {
-        nickname: nickname.trim(),
-        email: email.trim(),
-        provider: 'password',
-        avatar: '✈️',
-        createdAt: new Date(),
-      }, { merge: true });
-
-    } catch (error) {
-      if (error.code === 'functions/not-found') {
-        setErrorMsg('인증 코드를 찾을 수 없어요. 다시 요청해주세요.');
-      } else if (error.code === 'functions/failed-precondition') {
-        setErrorMsg('이미 사용된 코드입니다. 다시 요청해주세요.');
-      } else if (error.code === 'functions/deadline-exceeded') {
-        setErrorMsg('코드가 만료됐어요. 다시 요청해주세요.');
-      } else if (error.code === 'functions/unauthenticated') {
-        setErrorMsg('인증 코드가 올바르지 않아요.');
-      } else {
-        const msg = AUTH_ERRORS[error.code] || error.message || '오류가 발생했어요. 다시 시도해주세요.';
         setErrorMsg(msg);
       }
     } finally {
-      setVerifyLoading(false);
-    }
-  };
-
-  const handleResendCode = async () => {
-    clearErrors();
-    setVerifyLoading(true);
-    try {
-      const sendCodeFn = httpsCallable(functions, 'sendEmailCode');
-      await sendCodeFn({ email: email.trim(), purpose: 'signup' });
-      setErrorMsg('');
-      setVerifyCode('');
-    } catch (error) {
-      if (error.code === 'functions/resource-exhausted') {
-        setErrorMsg('1분 후 다시 요청해주세요.');
-      } else {
-        setErrorMsg('코드 재발송에 실패했어요. 잠시 후 다시 시도해주세요.');
-      }
-    } finally {
-      setVerifyLoading(false);
+      setLoading(false);
     }
   };
 
@@ -306,82 +238,6 @@ export default function LoginScreen({ navigation }) {
       }
     }
   };
-
-  // ── 이메일 인증 화면 (회원가입 2단계) ──────────────────────────
-  if (isSignUp && signupStep === 'verify') {
-    return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-        >
-        <ScrollView
-          contentContainerStyle={styles.inner}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={styles.logo}>📍 PINLOGER</Text>
-          <Text style={styles.subtitle}>이메일 인증</Text>
-
-          <View style={styles.verifyInfoBox}>
-            <Text style={styles.verifyInfoText}>
-              📧 {email.trim()}로{'\n'}인증 코드를 보냈어요.{'\n'}메일함을 확인해주세요. (10분 유효)
-            </Text>
-          </View>
-
-          <TextInput
-            style={[styles.input, styles.codeInput, errorMsg ? styles.inputError : null]}
-            placeholder="000000"
-            placeholderTextColor="#555"
-            value={verifyCode}
-            onChangeText={t => { setVerifyCode(t.replace(/[^0-9]/g, '').slice(0, 6)); setErrorMsg(''); }}
-            keyboardType="number-pad"
-            maxLength={6}
-            autoFocus
-          />
-
-          {errorMsg ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorBoxText}>⚠ {errorMsg}</Text>
-            </View>
-          ) : null}
-
-          <TouchableOpacity
-            style={[styles.button, verifyLoading && styles.buttonDisabled]}
-            onPress={handleVerifyAndSignup}
-            disabled={verifyLoading}
-          >
-            {verifyLoading
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.buttonText}>인증하고 가입하기</Text>
-            }
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.backBtn}
-            onPress={() => {
-              setSignupStep('form');
-              setVerifyCode('');
-              clearErrors();
-            }}
-          >
-            <Text style={styles.backBtnText}>← 뒤로</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.resendBtn}
-            onPress={handleResendCode}
-            disabled={verifyLoading}
-          >
-            <Text style={styles.resendBtnText}>코드 재발송</Text>
-          </TouchableOpacity>
-
-        </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    );
-  }
 
   // ── 기본 로그인/회원가입 폼 ──────────────────────────────────
   return (
@@ -459,14 +315,12 @@ export default function LoginScreen({ navigation }) {
         >
           {loading
             ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.buttonText}>{isSignUp ? '인증 메일 받기' : '로그인'}</Text>
+            : <Text style={styles.buttonText}>{isSignUp ? '회원가입' : '로그인'}</Text>
           }
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => {
           setIsSignUp(!isSignUp);
-          setSignupStep('form');
-          setVerifyCode('');
           setNickname('');
           clearErrors();
         }}>
@@ -532,10 +386,6 @@ const styles = StyleSheet.create({
   inputError: {
     borderColor: '#e94560', borderWidth: 1.5,
   },
-  codeInput: {
-    textAlign: 'center', fontSize: 32, fontWeight: 'bold',
-    letterSpacing: 12, color: '#e94560', marginBottom: 16,
-  },
   fieldErrorText: {
     color: '#e94560', fontSize: 12, marginBottom: 10, marginLeft: 4,
   },
@@ -580,16 +430,4 @@ const styles = StyleSheet.create({
   },
   kakaoBtnText: { color: '#3C1E1E', fontSize: 16, fontWeight: 'bold' },
 
-  // 이메일 인증 화면 전용
-  verifyInfoBox: {
-    backgroundColor: '#16213e', borderRadius: 12, padding: 20,
-    borderWidth: 1, borderColor: '#0f3460', marginBottom: 24,
-  },
-  verifyInfoText: {
-    color: '#aaa', fontSize: 14, lineHeight: 22, textAlign: 'center',
-  },
-  backBtn: { alignItems: 'center', marginBottom: 14 },
-  backBtnText: { color: '#aaa', fontSize: 14 },
-  resendBtn: { alignItems: 'center', paddingVertical: 8 },
-  resendBtnText: { color: '#4a9eff', fontSize: 13 },
 });

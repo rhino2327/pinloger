@@ -1,18 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   Alert, ScrollView, Modal, KeyboardAvoidingView, Platform,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   updatePassword, reauthenticateWithCredential,
   EmailAuthProvider, deleteUser, signOut,
-  PhoneAuthProvider, updatePhoneNumber,
 } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
-import * as WebBrowser from 'expo-web-browser';
-import { auth, db } from '../config/firebase';
+import { auth } from '../config/firebase';
 import { useUserProfile } from '../hooks/useUserProfile';
 
 const AVATARS = [
@@ -35,24 +31,6 @@ export default function ProfileScreen({ navigation }) {
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
-
-  // 휴대폰 인증 관련 상태
-  const [phoneModal, setPhoneModal] = useState(false);
-  const [phone, setPhone] = useState('');
-  const [phoneCode, setPhoneCode] = useState('');
-  const [phoneStep, setPhoneStep] = useState('input'); // 'input' | 'verify'
-  const [phoneLoading, setPhoneLoading] = useState(false);
-  const [phoneError, setPhoneError] = useState('');
-  const [verificationId, setVerificationId] = useState(null);
-  // 웹에서만 RecaptchaVerifier 사용 (네이티브는 향후 지원 예정)
-  const recaptchaVerifierRef = useRef(null);
-
-  const normalizePhone = (raw) => {
-    let n = raw.trim().replace(/[\s\-()]/g, '');
-    if (n.startsWith('0')) n = '+82' + n.slice(1);
-    else if (!n.startsWith('+')) n = '+82' + n;
-    return n;
-  };
 
   const saveNickname = async () => {
     const trimmed = nickname.trim();
@@ -146,101 +124,6 @@ export default function ProfileScreen({ navigation }) {
     );
   };
 
-  // 휴대폰 인증 코드 발송
-  // 네이티브: 인앱 브라우저(expo-web-browser)로 reCAPTCHA 처리 후 verificationId 수신
-  // 웹: RecaptchaVerifier 직접 사용
-  const handleSendPhoneCode = async () => {
-    setPhoneError('');
-    const trimmed = phone.trim();
-    if (!trimmed) { setPhoneError('전화번호를 입력해주세요.'); return; }
-    const normalized = normalizePhone(trimmed);
-    setPhoneLoading(true);
-    try {
-      if (Platform.OS === 'web') {
-        // 웹: RecaptchaVerifier 직접 사용
-        const { RecaptchaVerifier } = require('firebase/auth');
-        if (!recaptchaVerifierRef.current) {
-          const container = document.createElement('div');
-          document.body.appendChild(container);
-          recaptchaVerifierRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
-        }
-        const provider = new PhoneAuthProvider(auth);
-        const vid = await provider.verifyPhoneNumber(normalized, recaptchaVerifierRef.current);
-        setVerificationId(vid);
-      } else {
-        // 네이티브: 인앱 브라우저로 reCAPTCHA 처리
-        const verifyUrl = `https://pinloger.web.app/phone-verify?phone=${encodeURIComponent(normalized)}&redirect=pinloger%3A%2F%2Fphone-verify-callback`;
-        const result = await WebBrowser.openAuthSessionAsync(verifyUrl, 'pinloger://phone-verify-callback');
-        if (result.type !== 'success') {
-          setPhoneError('인증이 취소됐어요. 다시 시도해주세요.');
-          return;
-        }
-        const url = new URL(result.url);
-        const vid = url.searchParams.get('verificationId');
-        const err = url.searchParams.get('error');
-        if (err) { setPhoneError(decodeURIComponent(err)); return; }
-        if (!vid) { setPhoneError('인증에 실패했어요. 다시 시도해주세요.'); return; }
-        setVerificationId(decodeURIComponent(vid));
-      }
-      setPhoneStep('verify');
-    } catch (error) {
-      if (error.code === 'auth/invalid-phone-number') {
-        setPhoneError('올바른 전화번호 형식이 아닙니다.');
-      } else if (error.code === 'auth/too-many-requests') {
-        setPhoneError('요청이 너무 많습니다. 잠시 후 다시 시도해주세요.');
-      } else if (error.code === 'auth/credential-already-in-use') {
-        setPhoneError('이미 다른 계정에 등록된 번호입니다.');
-      } else {
-        setPhoneError(error.message || 'SMS 발송에 실패했어요. 다시 시도해주세요.');
-      }
-    } finally {
-      setPhoneLoading(false);
-    }
-  };
-
-  // 휴대폰 코드 확인 (Firebase Phone Auth)
-  const handleVerifyPhoneCode = async () => {
-    setPhoneError('');
-    if (!phoneCode.trim() || phoneCode.trim().length < 6) {
-      setPhoneError('6자리 인증 코드를 입력해주세요.');
-      return;
-    }
-    setPhoneLoading(true);
-    try {
-      const normalized = normalizePhone(phone.trim());
-      const credential = PhoneAuthProvider.credential(verificationId, phoneCode.trim());
-      await updatePhoneNumber(auth.currentUser, credential);
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), { phone: normalized });
-      setPhoneModal(false);
-      setPhone('');
-      setPhoneCode('');
-      setPhoneStep('input');
-      setVerificationId(null);
-      Alert.alert('완료', '휴대폰 번호가 등록됐어요!');
-    } catch (error) {
-      if (error.code === 'auth/invalid-verification-code') {
-        setPhoneError('인증 코드가 올바르지 않아요.');
-      } else if (error.code === 'auth/code-expired') {
-        setPhoneError('코드가 만료됐어요. 다시 요청해주세요.');
-      } else if (error.code === 'auth/credential-already-in-use') {
-        setPhoneError('이미 다른 계정에 등록된 번호입니다.');
-      } else {
-        setPhoneError(error.message || '인증에 실패했어요. 다시 시도해주세요.');
-      }
-    } finally {
-      setPhoneLoading(false);
-    }
-  };
-
-  const closePhoneModal = () => {
-    setPhoneModal(false);
-    setPhone('');
-    setPhoneCode('');
-    setPhoneStep('input');
-    setPhoneError('');
-    setVerificationId(null);
-  };
-
   if (!profile) return (
     <View style={styles.container}>
       <Text style={styles.loadingText}>불러오는 중...</Text>
@@ -284,9 +167,6 @@ export default function ProfileScreen({ navigation }) {
         )}
 
         <Text style={styles.email}>{user?.email}</Text>
-        <Text style={styles.phoneDisplay}>
-          📱 {profile.phone || '미등록'}
-        </Text>
         <View style={styles.providerBadge}>
           <Text style={styles.providerText}>
             {profile.provider === 'google.com' ? '🟦 Google 계정'
@@ -306,13 +186,6 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.menuArrow}>›</Text>
         </TouchableOpacity>
       )}
-
-      {/* 휴대폰 인증 메뉴 */}
-      <TouchableOpacity style={styles.menuItem} onPress={() => setPhoneModal(true)}>
-        <Text style={styles.menuIcon}>📱</Text>
-        <Text style={styles.menuLabel}>{profile.phone ? '휴대폰 변경' : '휴대폰 인증'}</Text>
-        <Text style={styles.menuArrow}>›</Text>
-      </TouchableOpacity>
 
       <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
         <Text style={styles.menuIcon}>🚪</Text>
@@ -374,92 +247,6 @@ export default function ProfileScreen({ navigation }) {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* 휴대폰 인증 모달 */}
-      <Modal visible={phoneModal} transparent animationType="slide">
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
-            <Text style={styles.modalTitle}>
-              {phoneStep === 'input' ? '휴대폰 인증' : '인증 코드 확인'}
-            </Text>
-
-            {phoneStep === 'input' && (
-              <>
-                <Text style={styles.modalSubtitle}>
-                  휴대폰 번호로 6자리 인증 코드를 보내드려요.
-                </Text>
-                <View style={styles.phoneRow}>
-                  <View style={styles.phonePrefix}>
-                    <Text style={styles.phonePrefixText}>🇰🇷 +82</Text>
-                  </View>
-                  <TextInput
-                    style={[styles.phoneInput, phoneError ? styles.inputError : null]}
-                    placeholder="010-1234-5678"
-                    placeholderTextColor="#aaa"
-                    value={phone}
-                    onChangeText={t => { setPhone(t); setPhoneError(''); }}
-                    keyboardType="phone-pad"
-                  />
-                </View>
-                {phoneError ? <Text style={styles.phoneErrorText}>⚠ {phoneError}</Text> : null}
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={closePhoneModal}>
-                    <Text style={styles.cancelBtnText}>취소</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.confirmBtn, phoneLoading && styles.btnDisabled]}
-                    onPress={handleSendPhoneCode}
-                    disabled={phoneLoading}
-                  >
-                    {phoneLoading
-                      ? <ActivityIndicator color="#fff" size="small" />
-                      : <Text style={styles.confirmBtnText}>인증 코드 받기</Text>
-                    }
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-
-            {phoneStep === 'verify' && (
-              <>
-                <Text style={styles.modalSubtitle}>
-                  {phone}으로 보낸{'\n'}6자리 인증 코드를 입력해주세요. (10분 유효)
-                </Text>
-                <TextInput
-                  style={[styles.input, styles.codeInput, phoneError ? styles.inputError : null]}
-                  placeholder="000000"
-                  placeholderTextColor="#555"
-                  value={phoneCode}
-                  onChangeText={t => { setPhoneCode(t.replace(/[^0-9]/g, '').slice(0, 6)); setPhoneError(''); }}
-                  keyboardType="number-pad"
-                  maxLength={6}
-                  autoFocus
-                />
-                {phoneError ? <Text style={styles.phoneErrorText}>⚠ {phoneError}</Text> : null}
-                <View style={styles.modalBtns}>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => { setPhoneStep('input'); setPhoneCode(''); setPhoneError(''); }}>
-                    <Text style={styles.cancelBtnText}>← 뒤로</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.confirmBtn, phoneLoading && styles.btnDisabled]}
-                    onPress={handleVerifyPhoneCode}
-                    disabled={phoneLoading}
-                  >
-                    {phoneLoading
-                      ? <ActivityIndicator color="#fff" size="small" />
-                      : <Text style={styles.confirmBtnText}>확인</Text>
-                    }
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </View>
-        </View>
-        </KeyboardAvoidingView>
-      </Modal>
       </ScrollView>
     </View>
   );
@@ -491,7 +278,6 @@ const styles = StyleSheet.create({
   nickErrorText: { color: '#e94560', fontSize: 12, marginTop: 4, textAlign: 'center' },
   nickname: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 6 },
   email: { color: '#aaa', fontSize: 14, marginBottom: 6 },
-  phoneDisplay: { color: '#888', fontSize: 13, marginBottom: 10 },
   providerBadge: { backgroundColor: '#0f3460', paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20 },
   providerText: { color: '#aaa', fontSize: 13 },
   sectionTitle: { color: '#aaa', fontSize: 13, fontWeight: 'bold', marginBottom: 12 },
@@ -521,22 +307,6 @@ const styles = StyleSheet.create({
     borderRadius: 10, marginBottom: 12, fontSize: 15, borderWidth: 1, borderColor: '#0f3460',
   },
   inputError: { borderColor: '#e94560', borderWidth: 1.5 },
-  codeInput: {
-    textAlign: 'center', fontSize: 28, fontWeight: 'bold',
-    letterSpacing: 10, color: '#e94560',
-  },
-  phoneRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  phonePrefix: {
-    backgroundColor: '#1a1a2e', borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 14,
-    borderWidth: 1, borderColor: '#0f3460', justifyContent: 'center',
-  },
-  phonePrefixText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  phoneInput: {
-    flex: 1, backgroundColor: '#1a1a2e', color: '#fff', padding: 14,
-    borderRadius: 10, fontSize: 15, borderWidth: 1, borderColor: '#0f3460',
-  },
-  phoneErrorText: { color: '#e94560', fontSize: 12, marginBottom: 10, marginLeft: 2 },
   modalBtns: { flexDirection: 'row', gap: 10, marginTop: 4 },
   cancelBtn: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#0f3460', alignItems: 'center' },
   cancelBtnText: { color: '#aaa', fontSize: 15 },

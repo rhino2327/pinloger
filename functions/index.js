@@ -453,7 +453,7 @@ exports.googlePlaceSearch = onCall({ secrets: ['GOOGLE_MAPS_API_KEY'] }, async (
 // 이메일 인증 코드 발송 (purpose: 'signup' | 'reset')
 // ──────────────────────────────────────────────
 exports.sendEmailCode = onCall(
-  { secrets: ['GMAIL_USER', 'GMAIL_APP_PASSWORD'] },
+  { secrets: ['SENDGRID_API_KEY'] },
   async (request) => {
     const { email, purpose } = request.data;
     if (!email || !purpose) throw new HttpsError('invalid-argument', '이메일과 목적이 필요합니다.');
@@ -490,18 +490,16 @@ exports.sendEmailCode = onCall(
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
-    });
+    const sgMail = require('@sendgrid/mail');
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
     const subject = purpose === 'signup' ? '[PINLOGER] 이메일 인증 코드' : '[PINLOGER] 비밀번호 재설정 코드';
-    await transporter.sendMail({
-      from: `PINLOGER <${process.env.GMAIL_USER}>`,
+    await sgMail.send({
+      from: { email: 'noreply@pinloger.web.app', name: 'PINLOGER' },
+      replyTo: 'rhino2327@gmail.com',
       to: email,
       subject,
-      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;background:#1a1a2e;color:#fff;padding:32px;border-radius:12px"><h2 style="color:#e94560">📍 PINLOGER</h2><p style="color:#aaa">아래 6자리 코드를 앱에 입력해주세요. 10분 내에 사용하세요.</p><div style="background:#16213e;border-radius:12px;padding:24px;text-align:center;margin:20px 0;border:1px solid #0f3460"><span style="font-size:36px;font-weight:bold;letter-spacing:12px;color:#e94560">${code}</span></div><p style="color:#666;font-size:13px">본인이 요청하지 않은 경우 무시하세요.</p></div>`,
+      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;background:#1a1a2e;color:#fff;padding:32px;border-radius:12px"><h2 style="color:#e94560">PINLOGER</h2><p style="color:#aaa">아래 6자리 코드를 앱에 입력해주세요. 10분 내에 사용하세요.</p><div style="background:#16213e;border-radius:12px;padding:24px;text-align:center;margin:20px 0;border:1px solid #0f3460"><span style="font-size:36px;font-weight:bold;letter-spacing:12px;color:#e94560">${code}</span></div><p style="color:#666;font-size:13px">본인이 요청하지 않은 경우 무시하세요.</p></div>`,
     });
 
     return { success: true };
