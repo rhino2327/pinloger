@@ -18,17 +18,63 @@ const HOURS     = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'
 const MINUTES   = ['00', '10', '20', '30', '40', '50'];
 const CURRENCIES = ['KRW', 'USD', 'JPY', 'EUR', 'CNY', 'THB', 'VND', 'GBP'];
 
-function getDuration(startTime, endTime) {
+function getDuration(startTime, endTime, crossDay = false) {
   if (!startTime || !endTime) return null;
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
-  const total = (eh * 60 + em) - (sh * 60 + sm);
+  let total = (eh * 60 + em) - (sh * 60 + sm);
+  if (crossDay) total += 24 * 60;
   if (total <= 0) return null;
   const h = Math.floor(total / 60);
   const m = total % 60;
   if (h === 0) return `${m}분`;
   if (m === 0) return `${h}시간`;
   return `${h}시간 ${m}분`;
+}
+
+// 날짜 문자열 + n일 → YYYY-MM-DD
+function addDays(dateStr, n) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+// "HH:MM" → 분 (자정 기준)
+function toMin(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// 특정 날짜에서 일정의 시간 범위 [start, end] (분, 자정 기준) 반환
+// 다일자 일정인 경우 시작일에는 [start, 1440], 종료일에는 [0, end]
+function getRangeOnDay(item, dayStr) {
+  const startMin = toMin(item.time);
+  const endMin   = toMin(item.endTime);
+  if (startMin == null) return null;
+  const startDay = item.date;
+  const endDay   = item.endDate || item.date;
+  // 시작일과 종료일 사이가 아니면 null
+  if (dayStr < startDay || dayStr > endDay) return null;
+  if (startDay === endDay) {
+    // 단일일자
+    if (endMin == null) return [startMin, startMin + 1]; // 시간만 있을 때 점으로
+    return [startMin, endMin];
+  }
+  // 다일자
+  if (dayStr === startDay) return [startMin, 24 * 60];
+  if (dayStr === endDay)   return [0, endMin ?? 0];
+  // 중간 일자 (3일 이상 걸치는 일정)
+  return [0, 24 * 60];
+}
+
+// 두 시간 범위 겹침 여부
+function rangesOverlap(a, b) {
+  if (!a || !b) return false;
+  return a[0] < b[1] && b[0] < a[1];
 }
 
 function getTripDays(startDate, endDate) {
@@ -55,6 +101,7 @@ const EMPTY_FORM = {
   memo: '',
   hour: '09', minute: '00', useTime: true,
   endHour: '10', endMinute: '00', useEndTime: false,
+  crossDay: false, // 다음 날까지 이어지는 일정
   transport: '', cost: '', currency: 'KRW',
   flightNumber: '', flightStatus: '', flightDelay: 0, airline: '', checkInMins: 120,
   depAirport: '', depIata: '', depTerminal: '', depGate: '', depCheckInDesk: '',
@@ -238,6 +285,7 @@ export default function ScheduleScreen({ route }) {
   const [form,        setForm]        = useState(EMPTY_FORM);
   const [selectedDay, setSelectedDay] = useState(null);
   const [flightDetailItem, setFlightDetailItem] = useState(null);
+  const [kebabOpenId, setKebabOpenId] = useState(null);
 
   const user    = auth.currentUser;
   const insets  = useSafeAreaInsets();
@@ -482,6 +530,7 @@ export default function ScheduleScreen({ route }) {
       endHour:      item.endTime ? item.endTime.split(':')[0] : '10',
       endMinute:    item.endTime ? item.endTime.split(':')[1] : '00',
       useEndTime:   !!item.endTime,
+      crossDay:     !!(item.endDate && item.endDate !== item.date),
       transport:    item.transport    || '',
       cost:         item.cost ? String(item.cost) : '',
       currency:     item.currency     || 'KRW',
@@ -509,6 +558,43 @@ export default function ScheduleScreen({ route }) {
 
   const saveSchedule = async () => {
     if (!form.title.trim()) { Alert.alert('알림', '제목을 입력해주세요.'); return; }
+
+    // 다일자 일정 종료일 계산
+    const startTime = form.useTime ? `${form.hour}:${form.minute}` : '';
+    const endTime   = (form.useTime && form.useEndTime) ? `${form.endHour}:${form.endMinute}` : '';
+    const endDate   = (form.useTime && form.useEndTime && form.crossDay)
+      ? addDays(selectedDay, 1)
+      : selectedDay;
+
+    // 종료 시간이 시작 시간보다 빠른데 crossDay가 아니면 경고
+    if (form.useTime && form.useEndTime && !form.crossDay) {
+      const sMin = toMin(startTime);
+      const eMin = toMin(endTime);
+      if (eMin <= sMin) {
+        Alert.alert('알림', '종료 시간이 시작 시간보다 빠릅니다.\n다음 날까지 이어지는 일정이면 "다음 날까지"를 켜주세요.');
+        return;
+      }
+    }
+
+    // ── 겹침 검사 ──
+    if (form.useTime) {
+      const newItem = { date: selectedDay, endDate, time: startTime, endTime };
+      const datesToCheck = endDate === selectedDay ? [selectedDay] : [selectedDay, endDate];
+      const conflict = schedules.find(s => {
+        if (editingId && s.id === editingId) return false; // 자기 자신은 제외
+        if (!s.time) return false; // 시간 미정 일정은 제외
+        return datesToCheck.some(d => {
+          const r1 = getRangeOnDay(newItem, d);
+          const r2 = getRangeOnDay(s, d);
+          return rangesOverlap(r1, r2);
+        });
+      });
+      if (conflict) {
+        Alert.alert('겹치는 일정이 있습니다', `"${conflict.title}" 일정과 시간이 겹쳐요.\n수정 후 다시 시도해주세요.`);
+        return;
+      }
+    }
+
     const data = {
       title:        form.title.trim(),
       fromLocation: form.fromLocation || '',
@@ -525,8 +611,10 @@ export default function ScheduleScreen({ route }) {
       lat:              form.toLat        || form.fromLat      || null,
       lng:              form.toLng        || form.fromLng      || null,
       memo:             form.memo.trim(),
-      time:             form.useTime ? `${form.hour}:${form.minute}` : '',
-      endTime:          (form.useTime && form.useEndTime) ? `${form.endHour}:${form.endMinute}` : '',
+      time:             startTime,
+      endTime:          endTime,
+      endDate:          endDate,
+      crossDay:         (form.useTime && form.useEndTime && form.crossDay) ? true : false,
       transport:        form.transport,
       cost:             form.cost ? Number(form.cost) : 0,
       currency:         form.currency,
@@ -571,7 +659,21 @@ export default function ScheduleScreen({ route }) {
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`);
   };
 
-  const daySchedules = schedules.filter(s => s.date === activeDay);
+  // 다일자 일정은 시작일·종료일·중간일에 모두 표시
+  const daySchedules = schedules
+    .filter(s => {
+      const start = s.date;
+      const end   = s.endDate || s.date;
+      return start <= activeDay && activeDay <= end;
+    })
+    .sort((a, b) => {
+      // 현재 날짜에 보여줄 시작 시간 기준 정렬
+      const aIsContinuation = a.date !== activeDay; // 이전 날에서 이어진 일정
+      const bIsContinuation = b.date !== activeDay;
+      const aTime = aIsContinuation ? '00:00' : (a.time || '');
+      const bTime = bIsContinuation ? '00:00' : (b.time || '');
+      return aTime > bTime ? 1 : -1;
+    });
 
   if (tripDays.length === 0) {
     return (
@@ -630,30 +732,58 @@ export default function ScheduleScreen({ route }) {
                   <View style={styles.cardHeader}>
                     <View style={styles.timeBlock}>
                       <Text style={styles.scheduleTime}>
-                        {item.time
-                          ? (item.endTime ? `${item.time} ~ ${item.endTime}` : item.time)
-                          : '시간 미정'}
+                        {(() => {
+                          if (!item.time) return '시간 미정';
+                          const startDay = item.date;
+                          const endDay   = item.endDate || item.date;
+                          const isMulti  = startDay !== endDay;
+                          if (!isMulti) {
+                            return item.endTime ? `${item.time} ~ ${item.endTime}` : item.time;
+                          }
+                          // 다일자
+                          if (activeDay === startDay)  return `${item.time} ~`;
+                          if (activeDay === endDay)    return `~ ${item.endTime || ''}`;
+                          return '종일';
+                        })()}
                       </Text>
-                      {item.time && item.endTime && getDuration(item.time, item.endTime) && (
+                      {item.time && item.endTime && getDuration(item.time, item.endTime, item.crossDay) && (
                         <View style={styles.durationBadge}>
                           <Text style={styles.durationText}>
-                            ⏱ {getDuration(item.time, item.endTime)}
+                            ⏱ {getDuration(item.time, item.endTime, item.crossDay)}
                           </Text>
                         </View>
                       )}
-                    </View>
-                    <View style={styles.cardActions}>
-                      {canEdit && (
-                        <>
-                          <TouchableOpacity style={styles.editBtn} onPress={() => openEdit(item)}>
-                            <Text style={styles.editBtnText}>✏️</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteSchedule(item.id)}>
-                            <Text style={styles.deleteBtnText}>🗑️</Text>
-                          </TouchableOpacity>
-                        </>
+                      {(item.endDate && item.endDate !== item.date) && (
+                        <View style={[styles.durationBadge, { backgroundColor: 'rgba(74,158,255,0.15)' }]}>
+                          <Text style={[styles.durationText, { color: '#4a9eff' }]}>↗ 다음 날까지</Text>
+                        </View>
                       )}
                     </View>
+                    {canEdit && (
+                      <TouchableOpacity
+                        style={styles.kebabBtn}
+                        onPress={() => setKebabOpenId(kebabOpenId === item.id ? null : item.id)}
+                      >
+                        <Text style={styles.kebabText}>⋮</Text>
+                      </TouchableOpacity>
+                    )}
+                    {kebabOpenId === item.id && (
+                      <View style={styles.kebabMenu}>
+                        <TouchableOpacity
+                          style={styles.kebabMenuItem}
+                          onPress={() => { setKebabOpenId(null); openEdit(item); }}
+                        >
+                          <Text style={styles.kebabMenuText}>✏️ 수정</Text>
+                        </TouchableOpacity>
+                        <View style={styles.kebabDivider} />
+                        <TouchableOpacity
+                          style={styles.kebabMenuItem}
+                          onPress={() => { setKebabOpenId(null); deleteSchedule(item.id); }}
+                        >
+                          <Text style={[styles.kebabMenuText, { color: '#e94560' }]}>🗑️ 삭제</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
 
                   {/* 이동수단 */}
@@ -811,15 +941,25 @@ export default function ScheduleScreen({ route }) {
 
                     {/* 종료 시간 */}
                     {form.useEndTime && (
-                      <View style={styles.timeRowWrap}>
-                        <Text style={styles.timeLabelTxt}>종료</Text>
-                        <View style={styles.pickerRow}>
-                          <ScrollPicker items={HOURS}   selectedValue={form.endHour}   onValueChange={v => setField('endHour', v)}   width={60} />
-                          <Text style={styles.sep}>시</Text>
-                          <ScrollPicker items={MINUTES} selectedValue={form.endMinute} onValueChange={v => setField('endMinute', v)} width={60} />
-                          <Text style={styles.sep}>분</Text>
+                      <>
+                        <View style={styles.timeRowWrap}>
+                          <Text style={styles.timeLabelTxt}>종료</Text>
+                          <View style={styles.pickerRow}>
+                            <ScrollPicker items={HOURS}   selectedValue={form.endHour}   onValueChange={v => setField('endHour', v)}   width={60} />
+                            <Text style={styles.sep}>시</Text>
+                            <ScrollPicker items={MINUTES} selectedValue={form.endMinute} onValueChange={v => setField('endMinute', v)} width={60} />
+                            <Text style={styles.sep}>분</Text>
+                          </View>
                         </View>
-                      </View>
+                        <TouchableOpacity
+                          style={[styles.crossDayBtn, form.crossDay && styles.crossDayBtnOn]}
+                          onPress={() => setField('crossDay', !form.crossDay)}
+                        >
+                          <Text style={[styles.crossDayTxt, form.crossDay && styles.crossDayTxtOn]}>
+                            {form.crossDay ? '✓ 다음 날까지 이어짐' : '↗ 다음 날까지 이어지나요?'}
+                          </Text>
+                        </TouchableOpacity>
+                      </>
                     )}
                   </>
                 )}
@@ -1070,7 +1210,7 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: '#16213e', borderRadius: 12, padding: 14,
     marginLeft: 10, marginBottom: 10, borderWidth: 1, borderColor: '#0f3460',
   },
-  cardHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  cardHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, position: 'relative' },
   timeBlock:    { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   scheduleTime: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   durationBadge: {
@@ -1084,6 +1224,30 @@ const styles = StyleSheet.create({
   editBtnText:  { fontSize: 14 },
   deleteBtn:    { padding: 4 },
   deleteBtnText:{ fontSize: 14 },
+  kebabBtn:     { paddingHorizontal: 10, paddingVertical: 4 },
+  kebabText:    { color: '#aaa', fontSize: 22, fontWeight: 'bold', lineHeight: 24 },
+  kebabMenu:    {
+    position: 'absolute', top: 32, right: 6, zIndex: 10,
+    backgroundColor: '#0f3460', borderRadius: 10,
+    borderWidth: 1, borderColor: '#1a4a7a',
+    minWidth: 110, paddingVertical: 4,
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  kebabMenuItem:{ paddingVertical: 10, paddingHorizontal: 14 },
+  kebabMenuText:{ color: '#fff', fontSize: 14 },
+  kebabDivider: { height: 1, backgroundColor: '#1a4a7a', marginHorizontal: 4 },
+  crossDayBtn:  {
+    backgroundColor: 'transparent',
+    borderWidth: 1, borderColor: '#0f3460', borderStyle: 'dashed',
+    borderRadius: 10, padding: 10, alignItems: 'center', marginTop: 6, marginBottom: 6,
+  },
+  crossDayBtnOn:{
+    backgroundColor: 'rgba(74,158,255,0.12)',
+    borderColor: '#4a9eff', borderStyle: 'solid',
+  },
+  crossDayTxt:  { color: '#aaa', fontSize: 13, fontWeight: 'bold' },
+  crossDayTxtOn:{ color: '#4a9eff' },
   transportBadge: {
     backgroundColor: 'rgba(74,158,255,0.15)', borderRadius: 8,
     paddingHorizontal: 8, paddingVertical: 3,
