@@ -10,9 +10,38 @@ const getDuration = (start, end) => {
   return `${Math.round((new Date(end) - new Date(start)) / 86400000) + 1}일`;
 };
 
+// 출발일까지 D-day 계산 (양수: 남은 일수, 0: 오늘, 음수: 지남)
+const getDday = (startDate, endDate) => {
+  if (!startDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+  const diff = Math.round((start - today) / 86400000);
+  if (diff > 0)  return { type: 'before',  text: `D-${diff}`, days: diff };
+  if (diff === 0) return { type: 'today',  text: 'D-DAY',     days: 0 };
+  // 출발 후 — 여행 종료 전이면 여행 중
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(0, 0, 0, 0);
+    if (end >= today) return { type: 'during', text: '여행 중', days: 0 };
+  }
+  return { type: 'past', text: `D+${Math.abs(diff)}`, days: diff };
+};
+
+// D-day 배지 색상
+const ddayStyle = {
+  before: { bg: 'rgba(74,158,255,0.15)', border: '#4a9eff', text: '#4a9eff' },
+  today:  { bg: 'rgba(233,69,96,0.18)',  border: '#e94560', text: '#e94560' },
+  during: { bg: 'rgba(76,217,100,0.15)', border: '#4cd964', text: '#4cd964' },
+  past:   { bg: 'rgba(170,170,170,0.15)', border: '#666',   text: '#aaa'    },
+};
+
 // TripCard을 컴포넌트 밖에 정의 → 렌더링마다 재생성 방지
 const TripCard = ({ item, isPast, navigation }) => {
   const user = auth.currentUser;
+  const dday = getDday(item.startDate, item.endDate);
+  const ddayCol = dday ? ddayStyle[dday.type] : null;
   return (
     <TouchableOpacity
       style={[styles.tripCard, isPast && styles.tripCardPast]}
@@ -20,7 +49,14 @@ const TripCard = ({ item, isPast, navigation }) => {
     >
       <Text style={styles.tripFlag}>{item.flag || '🌍'}</Text>
       <View style={styles.tripInfo}>
-        <Text style={[styles.tripName, isPast && styles.tripNamePast]}>{item.name}</Text>
+        <View style={styles.tripNameRow}>
+          <Text style={[styles.tripName, isPast && styles.tripNamePast]} numberOfLines={1}>{item.name}</Text>
+          {dday && (
+            <View style={[styles.ddayBadge, { backgroundColor: ddayCol.bg, borderColor: ddayCol.border }]}>
+              <Text style={[styles.ddayText, { color: ddayCol.text }]}>{dday.text}</Text>
+            </View>
+          )}
+        </View>
         <Text style={styles.tripDest}>📍 {item.destination}</Text>
         {item.startDate && (
           <Text style={styles.tripDate}>
@@ -167,8 +203,14 @@ const styles = StyleSheet.create({
   tripCardPast: { opacity: 0.7 },
   tripFlag: { fontSize: 34, marginRight: 14 },
   tripInfo: { flex: 1 },
-  tripName: { color: '#fff', fontSize: 15, fontWeight: 'bold', marginBottom: 3 },
+  tripNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
+  tripName: { color: '#fff', fontSize: 15, fontWeight: 'bold', flexShrink: 1 },
   tripNamePast: { color: '#bbb' },
+  ddayBadge: {
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 8, borderWidth: 1,
+  },
+  ddayText: { fontSize: 11, fontWeight: 'bold' },
   tripDest: { color: '#aaa', fontSize: 13, marginBottom: 3 },
   tripDate: { color: '#4a9eff', fontSize: 12, marginBottom: 5 },
   tagRow: { flexDirection: 'row', gap: 6 },
