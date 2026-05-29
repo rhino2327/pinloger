@@ -46,30 +46,6 @@ const formatForeign = (n, code) => {
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-// 통화 → 국가 플래그로 가장 적합한 여행 자동 매칭 (순수 함수)
-function findTripForCurrency(currencyCode, trips) {
-  const curInfo = CURRENCIES.find(c => c.code === currencyCode);
-  if (!curInfo?.flag) return null;
-  const matches = trips.filter(t => t.flag === curInfo.flag);
-  if (matches.length === 0) return null;
-  const today = todayStr();
-  // 1순위: 현재 진행 중인 여행
-  const active = matches.find(
-    t => (t.startDate || '') <= today && (t.endDate || '') >= today
-  );
-  if (active) return active.id;
-  // 2순위: 가장 가까운 예정 여행
-  const upcoming = matches
-    .filter(t => (t.startDate || '') > today)
-    .sort((a, b) => (a.startDate > b.startDate ? 1 : -1));
-  if (upcoming.length > 0) return upcoming[0].id;
-  // 3순위: 가장 최근 종료된 여행
-  const past = matches
-    .filter(t => (t.endDate || '') < today)
-    .sort((a, b) => (a.endDate > b.endDate ? -1 : 1));
-  return past.length > 0 ? past[0].id : null;
-}
-
 const formatLiveRate = (ratePerKRW) => {
   if (!ratePerKRW) return null;
   const v = 1 / ratePerKRW;
@@ -184,21 +160,40 @@ export default function ExchangeScreen() {
     return () => { costUnsubsRef.current.forEach(u => u()); costUnsubsRef.current = []; };
   }, [userTrips.map(t => t.id).join(','), user?.uid]);
 
-  // ── 새 여행 생성 시 미연결 환전 자동 재연결 ──
-  useEffect(() => {
-    if (!user || userTrips.length === 0 || history.length === 0) return;
-    const unlinked = history.filter(h => !h.tripId);
-    if (unlinked.length === 0) return;
-    unlinked.forEach(item => {
-      const matchId = findTripForCurrency(item.currency, userTrips);
-      if (matchId) {
-        updateDoc(doc(db, 'exchanges', item.id), { tripId: matchId }).catch(() => {});
-      }
-    });
-  }, [
-    userTrips.map(t => t.id).join(','),
-    history.filter(h => !h.tripId).map(h => h.id).join(','),
-  ]);
+  // ── 여행 연동 모달 ──
+  const [linkModalVisible, setLinkModalVisible] = useState(false);
+  const [linkTarget, setLinkTarget] = useState(null); // 연동할 환전 항목
+  const [linkShowAll, setLinkShowAll] = useState(false);
+
+  const openLinkModal = (item) => {
+    setLinkTarget(item);
+    setLinkShowAll(false);
+    setLinkModalVisible(true);
+  };
+
+  const linkToTrip = async (tripId) => {
+    if (!linkTarget) return;
+    try {
+      await updateDoc(doc(db, 'exchanges', linkTarget.id), { tripId });
+    } catch {
+      Alert.alert('오류', '연동 중 문제가 발생했어요.');
+    } finally {
+      setLinkModalVisible(false);
+      setLinkTarget(null);
+    }
+  };
+
+  const unlinkFromTrip = (item) => {
+    Alert.alert('연동 해제', '이 환전 내역을 여행에서 분리할까요?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '해제', style: 'destructive',
+        onPress: async () => {
+          try { await updateDoc(doc(db, 'exchanges', item.id), { tripId: null }); } catch {}
+        },
+      },
+    ]);
+  };
 
   const fetchRates = async () => {
     setLoading(true);
@@ -334,8 +329,8 @@ export default function ExchangeScreen() {
     setSaving(true);
     try {
       const krwAmount = Math.round(amt * rate);
-      const autoTripId = findTripForCurrency(fCurrency, userTrips);
-      const d = { currency: fCurrency, foreignAmount: amt, rate, krwAmount, memo: fMemo.trim(), tripId: autoTripId };
+      // 자동 연동 제거 — 사용자가 지갑에서 직접 연동
+      const d = { currency: fCurrency, foreignAmount: amt, rate, krwAmount, memo: fMemo.trim(), tripId: editTarget?.tripId ?? null };
       if (editTarget) {
         await updateDoc(doc(db, 'exchanges', editTarget.id), d);
       } else {
@@ -609,6 +604,9 @@ export default function ExchangeScreen() {
                                   <TouchableOpacity style={styles.editBtn} onPress={() => openEdit(item)}>
                                     <Text style={styles.editBtnText}>수정</Text>
                                   </TouchableOpacity>
+                                  <TouchableOpacity style={styles.unlinkBtn} onPress={() => unlinkFromTrip(item)}>
+                                    <Text style={styles.unlinkBtnText}>분리</Text>
+                                  </TouchableOpacity>
                                   <TouchableOpacity style={styles.delBtn} onPress={() => handleDelete(item.id)}>
                                     <Text style={styles.delBtnText}>🗑</Text>
                                   </TouchableOpacity>
@@ -652,6 +650,9 @@ export default function ExchangeScreen() {
                               </TouchableOpacity>
                             </View>
                           </View>
+                          <TouchableOpacity style={styles.linkTripBtn} onPress={() => openLinkModal(item)}>
+                            <Text style={styles.linkTripBtnText}>🔗 여행 연동하기</Text>
+                          </TouchableOpacity>
                           <View style={styles.historyDivider} />
                           <View style={styles.historyBottom}>
                             <View style={styles.infoRow}>
@@ -706,6 +707,64 @@ export default function ExchangeScreen() {
               );
             }}
           />
+        </View>
+      </Modal>
+
+      {/* ══ 여행 연동 선택 모달 ══ */}
+      <Modal visible={linkModalVisible} transparent animationType="slide">
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setLinkModalVisible(false)} />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={styles.handle} />
+          <Text style={styles.sheetTitle}>여행 연동하기</Text>
+          {linkTarget ? (() => {
+            const curInfo = CURRENCIES.find(c => c.code === linkTarget.currency);
+            const flag = curInfo?.flag;
+            const matched = userTrips.filter(t => t.flag === flag);
+            const others = userTrips.filter(t => t.flag !== flag);
+            const showAll = linkShowAll || matched.length === 0;
+            const showList = showAll ? userTrips : matched;
+            return (
+              <>
+                <Text style={styles.linkSubtitle}>
+                  {showAll
+                    ? '전체 여행 목록'
+                    : `${flag || ''} ${linkTarget.currency} 통화에 맞는 여행`}
+                </Text>
+                {showList.length === 0 ? (
+                  <View style={{ padding: 30, alignItems: 'center' }}>
+                    <Text style={{ color: '#aaa' }}>등록된 여행이 없어요.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={showList}
+                    keyExtractor={t => t.id}
+                    showsVerticalScrollIndicator={false}
+                    style={{ maxHeight: 360 }}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={styles.sheetItem}
+                        onPress={() => linkToTrip(item.id)}
+                      >
+                        <Text style={styles.sheetFlag}>{item.flag || '🌍'}</Text>
+                        <View style={styles.sheetInfo}>
+                          <Text style={styles.sheetCode}>{item.name}</Text>
+                          <Text style={styles.sheetName}>{item.startDate || ''} ~ {item.endDate || ''}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    )}
+                  />
+                )}
+                {!showAll && others.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.linkShowAllBtn}
+                    onPress={() => setLinkShowAll(true)}
+                  >
+                    <Text style={styles.linkShowAllText}>다른 국가 여행도 보기 ({others.length})</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            );
+          })() : null}
         </View>
       </Modal>
 
@@ -776,23 +835,9 @@ export default function ExchangeScreen() {
                   placeholderTextColor="#555"
                 />
 
-                {/* 자동 여행 연결 표시 */}
-                {(() => {
-                  const autoId   = findTripForCurrency(fCurrency, userTrips);
-                  const autoTrip = userTrips.find(t => t.id === autoId);
-                  if (!autoTrip) return (
-                    <View style={styles.autoTripNone}>
-                      <Text style={styles.autoTripNoneText}>💼 매칭되는 여행이 없어 개인 기록으로 저장돼요</Text>
-                    </View>
-                  );
-                  return (
-                    <View style={styles.autoTripInfo}>
-                      <Text style={styles.autoTripInfoText}>
-                        ✓ {autoTrip.flag || '🌍'} {autoTrip.name}에 자동 연결됩니다
-                      </Text>
-                    </View>
-                  );
-                })()}
+                <View style={styles.autoTripNone}>
+                  <Text style={styles.autoTripNoneText}>💼 저장 후 지갑에서 여행을 선택해 연동할 수 있어요</Text>
+                </View>
 
                 <View style={styles.formBtns}>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => setFormVisible(false)}>
@@ -938,6 +983,21 @@ const styles = StyleSheet.create({
   editBtnText:   { color: '#4a9eff', fontSize: 13, fontWeight: 'bold' },
   delBtn:        { padding: 6 },
   delBtnText:    { fontSize: 16 },
+  unlinkBtn:     { backgroundColor: 'rgba(170,170,170,0.15)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  unlinkBtnText: { color: '#aaa', fontSize: 12, fontWeight: 'bold' },
+  linkTripBtn:   {
+    marginTop: 8, marginHorizontal: 16, marginBottom: 8,
+    backgroundColor: 'rgba(74,158,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(74,158,255,0.4)',
+    borderRadius: 10, padding: 10, alignItems: 'center',
+  },
+  linkTripBtnText:{ color: '#4a9eff', fontSize: 13, fontWeight: 'bold' },
+  linkSubtitle:  { color: '#aaa', fontSize: 13, marginBottom: 12, paddingHorizontal: 4 },
+  linkShowAllBtn:{
+    marginTop: 12, padding: 12, borderRadius: 10,
+    backgroundColor: '#0f3460', alignItems: 'center',
+  },
+  linkShowAllText:{ color: '#4a9eff', fontSize: 13, fontWeight: 'bold' },
   historyDivider:{ height: 1, backgroundColor: '#0f3460' },
   historyBottom: { padding: 16, paddingTop: 12, gap: 6 },
   infoRow:       { flexDirection: 'row', justifyContent: 'space-between' },
