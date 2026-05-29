@@ -59,7 +59,6 @@ module.exports = {
             "여행 일정에 장소를 추가하고 지도에서 위치를 확인하기 위해 위치 정보를 사용합니다.",
         },
       ],
-      "expo-web-browser",
       [
         "expo-notifications",
         {

@@ -168,11 +168,7 @@ export default function ProfileScreen({ navigation }) {
 
         <Text style={styles.email}>{user?.email}</Text>
         <View style={styles.providerBadge}>
-          <Text style={styles.providerText}>
-            {profile.provider === 'google.com' ? '🟦 Google 계정'
-              : profile.provider === 'apple.com' ? '⬛ Apple 계정'
-              : '📧 이메일 계정'}
-          </Text>
+          <Text style={styles.providerText}>📧 이메일 계정</Text>
         </View>
       </View>
 

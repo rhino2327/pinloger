@@ -48,61 +48,6 @@ function nowMinutesKST() {
 }
 
 // ──────────────────────────────────────────────
-// Kakao OAuth 로그인
-// ──────────────────────────────────────────────
-exports.kakaoLogin = onCall({ secrets: ['KAKAO_REST_API_KEY'] }, async (request) => {
-  const { code, redirectUri } = request.data;
-  if (!code || !redirectUri)
-    throw new HttpsError('invalid-argument', 'code와 redirectUri가 필요합니다.');
-
-  const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY;
-  if (!KAKAO_REST_API_KEY)
-    throw new HttpsError('internal', '서버 설정 오류: Kakao API 키가 없습니다.');
-
-  const tokenRes = await fetch('https://kauth.kakao.com/oauth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
-    body: [
-      'grant_type=authorization_code',
-      `client_id=${KAKAO_REST_API_KEY}`,
-      `redirect_uri=${encodeURIComponent(redirectUri)}`,
-      `code=${code}`,
-    ].join('&'),
-  });
-  const tokenData = await tokenRes.json();
-  if (!tokenData.access_token)
-    throw new HttpsError('unauthenticated', `Kakao 토큰 발급 실패: ${tokenData.error_description || 'unknown'}`);
-
-  const userRes = await fetch('https://kapi.kakao.com/v2/user/me', {
-    headers: { Authorization: `Bearer ${tokenData.access_token}` },
-  });
-  const kakaoUser = await userRes.json();
-  if (!kakaoUser.id)
-    throw new HttpsError('unauthenticated', '카카오 사용자 정보 조회 실패');
-
-  const kakaoId      = String(kakaoUser.id);
-  const email        = kakaoUser.kakao_account?.email;
-  const nickname     = kakaoUser.kakao_account?.profile?.nickname || '카카오 사용자';
-  const profileImage = kakaoUser.kakao_account?.profile?.profile_image_url || null;
-  const uid          = `kakao:${kakaoId}`;
-
-  const customToken = await admin.auth().createCustomToken(uid, {
-    provider: 'kakao', kakaoId, nickname,
-    email: email || `kakao_${kakaoId}@kakao.pinloger`,
-  });
-
-  const db = admin.firestore();
-  await db.collection('users').doc(uid).set({
-    uid, provider: 'kakao', kakaoId, nickname,
-    email: email || `kakao_${kakaoId}@kakao.pinloger`,
-    profileImage,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
-
-  return { customToken, uid, nickname, profileImage };
-});
-
-// ──────────────────────────────────────────────
 // 일정 변경 시 멤버 전체 푸시 알림
 // ──────────────────────────────────────────────
 exports.notifyScheduleChange = onDocumentWritten(
