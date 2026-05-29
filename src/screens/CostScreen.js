@@ -7,7 +7,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   collection, addDoc, onSnapshot, query, where,
-  deleteDoc, doc, serverTimestamp, updateDoc,
+  deleteDoc, doc, serverTimestamp, updateDoc, getDoc,
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 
@@ -25,8 +25,30 @@ const CURRENCIES = [
 const CATEGORIES = ['숙소', '교통', '식비', '관광', '쇼핑', '기타'];
 const COST_ACTION_W = 140;
 
+// 지출 타입 레이블/색상
+const EXPENSE_TYPE_INFO = {
+  shared:    { label: '공금',     color: '#4a9eff', bg: 'rgba(74,158,255,0.15)' },
+  personal:  { label: '개인',     color: '#aaa',    bg: 'rgba(170,170,170,0.18)' },
+  selective: { label: '선택지출', color: '#e94560', bg: 'rgba(233,69,96,0.15)' },
+};
+
 // ── 지출 항목 카드 ──────────────────────────────────────────
-function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExchange }) {
+function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExchange, memberProfiles, currentUid }) {
+  const expType = item.expenseType || 'shared';
+  const typeInfo = EXPENSE_TYPE_INFO[expType] || EXPENSE_TYPE_INFO.shared;
+  const payersLabel = (() => {
+    if (expType === 'shared') return null;
+    if (expType === 'personal') {
+      const uid = item.personalUid || currentUid;
+      return memberProfiles?.[uid]?.nickname || '본인';
+    }
+    if (expType === 'selective') {
+      const list = item.selectedPayers || [];
+      if (list.length === 0) return null;
+      return list.map(uid => memberProfiles?.[uid]?.nickname || '?').join(', ');
+    }
+    return null;
+  })();
   const translateX = useRef(new Animated.Value(0)).current;
   const cur = item.currency || 'KRW';
   const amt = item.cost || item.amount || 0;
@@ -58,6 +80,9 @@ function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExcha
           <View style={cStyles.costLeft}>
             <View style={cStyles.costTagRow}>
               <Text style={cStyles.costCategory}>{item.category || '일정 비용'}</Text>
+              <View style={[cStyles.typeBadge, { backgroundColor: typeInfo.bg, borderColor: typeInfo.color }]}>
+                <Text style={[cStyles.typeBadgeText, { color: typeInfo.color }]}>{typeInfo.label}</Text>
+              </View>
               {item.source === 'schedule' && (
                 <View style={cStyles.schedBadge}><Text style={cStyles.schedBadgeText}>📅 일정</Text></View>
               )}
@@ -66,6 +91,9 @@ function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExcha
               )}
             </View>
             <Text style={cStyles.costTitle}>{item.title}</Text>
+            {payersLabel && (
+              <Text style={cStyles.payersLabel}>👤 {payersLabel}</Text>
+            )}
             {item.date && <Text style={cStyles.costDate}>{item.date}{item.time ? ` ${item.time}` : ''}</Text>}
           </View>
           <View style={cStyles.costRight}>
@@ -105,6 +133,14 @@ export default function CostScreen({ route }) {
   const [currency,       setCurrency]       = useState('KRW');
   const [category,       setCategory]       = useState('기타');
   const [costDate,       setCostDate]       = useState('');
+  const [expenseType,    setExpenseType]    = useState('shared'); // shared | personal | selective
+  const [selectedPayers, setSelectedPayers] = useState([]);       // selective: uids
+
+  // 지출 타입 필터
+  const [typeFilter, setTypeFilter] = useState('all'); // all | shared | personal | selective
+
+  // 멤버 프로필 (uid → { nickname, avatar, ... })
+  const [memberProfiles, setMemberProfiles] = useState({});
 
   // 환전 모달
   const [cashModal,          setCashModal]          = useState(false);
@@ -117,6 +153,24 @@ export default function CostScreen({ route }) {
 
   const user    = auth.currentUser;
   const canEdit = ['owner', 'editor'].includes(trip.memberRoles?.[user.uid]);
+  const members = trip.members || [];
+  const memberCount = Math.max(members.length, 1);
+
+  // 멤버 프로필 로딩
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const profiles = {};
+      await Promise.all(members.map(async (uid) => {
+        try {
+          const snap = await getDoc(doc(db, 'users', uid));
+          if (snap.exists()) profiles[uid] = snap.data();
+        } catch {}
+      }));
+      if (!cancelled) setMemberProfiles(profiles);
+    })();
+    return () => { cancelled = true; };
+  }, [members.join(',')]);
 
   useEffect(() => {
     const q1 = query(collection(db, 'costs'), where('tripId', '==', trip.id));
@@ -204,6 +258,35 @@ export default function CostScreen({ route }) {
     s + toKRW(c.cost || c.amount || 0, c.currency || 'KRW'), 0
   );
 
+  // ── 지출 타입별 합계 (KRW) ──
+  // 일정 비용은 기본 '공금'으로 취급 (expenseType 없으면 'shared')
+  const typeOf = (c) => c.expenseType || 'shared';
+  const amtKRW = (c) => toKRW(c.cost || c.amount || 0, c.currency || 'KRW');
+
+  const sharedTotalKRW = allCosts
+    .filter(c => typeOf(c) === 'shared')
+    .reduce((s, c) => s + amtKRW(c), 0);
+
+  // 내 1/N (공금)
+  const mySharedKRW = sharedTotalKRW / memberCount;
+
+  // 내 개인 지출 (내가 등록한 것)
+  const myPersonalKRW = allCosts
+    .filter(c => typeOf(c) === 'personal' && (c.personalUid || c.uid) === user.uid)
+    .reduce((s, c) => s + amtKRW(c), 0);
+
+  // 내가 포함된 선택지출의 N분의 1 합계
+  const mySelectiveKRW = allCosts
+    .filter(c => typeOf(c) === 'selective' && (c.selectedPayers || []).includes(user.uid))
+    .reduce((s, c) => {
+      const list = c.selectedPayers || [];
+      const share = list.length > 0 ? amtKRW(c) / list.length : 0;
+      return s + share;
+    }, 0);
+
+  // 내 총 지출
+  const myTotalKRW = mySharedKRW + myPersonalKRW + mySelectiveKRW;
+
   const byCategoryKRW = CATEGORIES.reduce((acc, cat) => {
     const sum = allCosts.filter(c => (c.category || '기타') === cat)
       .reduce((s, c) => s + toKRW(c.cost || c.amount || 0, c.currency || 'KRW'), 0);
@@ -238,12 +321,15 @@ export default function CostScreen({ route }) {
   ];
 
   const displayCosts = (() => {
-    const sorted = allCosts.slice().sort((a, b) =>
-      (a.date || '') > (b.date || '') ? 1 : -1
-    );
-    if (activeTab === 'all') return sorted;
+    let list = allCosts.slice();
+    // 타입 필터
+    if (typeFilter !== 'all') {
+      list = list.filter(c => typeOf(c) === typeFilter);
+    }
+    list.sort((a, b) => (a.date || '') > (b.date || '') ? 1 : -1);
+    if (activeTab === 'all') return list;
     const dayNum = parseInt(activeTab, 10);
-    return sorted.filter(c => getDayNum(c.date) === dayNum);
+    return list.filter(c => getDayNum(c.date) === dayNum);
   })();
 
   // 통화별 총 환전액 (외화)
@@ -267,6 +353,8 @@ export default function CostScreen({ route }) {
     setEditingCostId(null);
     setTitle(''); setAmount(''); setCurrency('KRW'); setCategory('기타');
     setCostDate(nowDateStr());
+    setExpenseType('shared');
+    setSelectedPayers([]);
     setAddModal(true);
   };
   const openEditModal = (item) => {
@@ -276,31 +364,48 @@ export default function CostScreen({ route }) {
     setCurrency(item.currency || 'KRW');
     setCategory(item.category || '기타');
     setCostDate(item.date || nowDateStr());
+    setExpenseType(item.expenseType || 'shared');
+    setSelectedPayers(item.selectedPayers || []);
     setAddModal(true);
+  };
+  const togglePayer = (uid) => {
+    setSelectedPayers(prev =>
+      prev.includes(uid) ? prev.filter(u => u !== uid) : [...prev, uid]
+    );
   };
   const saveCost = async () => {
     if (!title.trim() || !amount.trim()) {
       Alert.alert('알림', '항목명과 금액을 입력해주세요.'); return;
     }
+    if (expenseType === 'selective' && selectedPayers.length === 0) {
+      Alert.alert('알림', '선택지출은 결제 인원을 1명 이상 선택해주세요.'); return;
+    }
     const dayLabel = costDate && getDayNum(costDate) > 0
       ? `${getDayNum(costDate)}일차`
       : null;
+    const expenseFields = {
+      expenseType,
+      personalUid:    expenseType === 'personal'  ? user.uid : null,
+      selectedPayers: expenseType === 'selective' ? selectedPayers : [],
+    };
     try {
       if (editingCostId) {
         await updateDoc(doc(db, 'costs', editingCostId), {
           title: title.trim(), amount: Number(amount), currency, category,
           date: costDate || null, dayLabel,
+          ...expenseFields,
         });
       } else {
         await addDoc(collection(db, 'costs'), {
           tripId: trip.id, title: title.trim(),
           amount: Number(amount), currency, category,
           date: costDate || null, dayLabel,
+          ...expenseFields,
           createdAt: serverTimestamp(),
         });
       }
       setTitle(''); setAmount(''); setCurrency('KRW'); setCategory('기타');
-      setCostDate('');
+      setCostDate(''); setExpenseType('shared'); setSelectedPayers([]);
       setEditingCostId(null); setAddModal(false);
     } catch (e) {
       Alert.alert('오류', '비용 저장에 실패했어요. 다시 시도해주세요.');
@@ -390,8 +495,34 @@ export default function CostScreen({ route }) {
         <View style={styles.totalCard}>
           <Text style={styles.totalLabel}>총 지출 (원화 환산)</Text>
           <Text style={styles.totalAmount}>₩{Math.round(totalKRW).toLocaleString('ko-KR')}</Text>
+
+          {/* 내 지출 세부 */}
+          <View style={styles.myBreakdown}>
+            <View style={styles.myBreakdownRow}>
+              <Text style={styles.myBreakdownLabel}>전체 공금</Text>
+              <Text style={styles.myBreakdownVal}>₩{Math.round(sharedTotalKRW).toLocaleString()}</Text>
+            </View>
+            <View style={styles.myBreakdownRow}>
+              <Text style={styles.myBreakdownLabel}>내 1/{memberCount} 분담</Text>
+              <Text style={styles.myBreakdownVal}>₩{Math.round(mySharedKRW).toLocaleString()}</Text>
+            </View>
+            <View style={styles.myBreakdownRow}>
+              <Text style={styles.myBreakdownLabel}>내 개인 지출</Text>
+              <Text style={styles.myBreakdownVal}>₩{Math.round(myPersonalKRW).toLocaleString()}</Text>
+            </View>
+            <View style={styles.myBreakdownRow}>
+              <Text style={styles.myBreakdownLabel}>내 선택지출 분담</Text>
+              <Text style={styles.myBreakdownVal}>₩{Math.round(mySelectiveKRW).toLocaleString()}</Text>
+            </View>
+            <View style={styles.myBreakdownDivider} />
+            <View style={styles.myBreakdownRow}>
+              <Text style={styles.myBreakdownTotalLabel}>내 지출 합계</Text>
+              <Text style={styles.myBreakdownTotalVal}>₩{Math.round(myTotalKRW).toLocaleString()}</Text>
+            </View>
+          </View>
+
           {Object.keys(byCategoryKRW).length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
               {Object.entries(byCategoryKRW).map(([cat, val]) => (
                 <View key={cat} style={styles.catChip}>
                   <Text style={styles.catChipLabel}>{cat}</Text>
@@ -554,6 +685,32 @@ export default function CostScreen({ route }) {
           </View>
         )}
 
+        {/* 타입 필터 */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterRow}
+          contentContainerStyle={{ paddingRight: 8 }}
+        >
+          {[
+            { key: 'all',       label: '전체' },
+            { key: 'shared',    label: '💰 공금' },
+            { key: 'personal',  label: '👤 개인' },
+            { key: 'selective', label: '👥 선택' },
+          ].map(({ key, label }) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.filterBtn, typeFilter === key && styles.filterBtnActive]}
+              onPress={() => setTypeFilter(key)}
+            >
+              <Text style={[styles.filterText, typeFilter === key && styles.filterTextActive]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* 일차 필터 */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -586,6 +743,8 @@ export default function CostScreen({ route }) {
               symOf={symOf}
               toKRW={toKRW}
               hasExchange={totalExchanged(item.currency || 'KRW') > 0}
+              memberProfiles={memberProfiles}
+              currentUid={user.uid}
             />
           ))
         )}
@@ -651,6 +810,58 @@ export default function CostScreen({ route }) {
                     </TouchableOpacity>
                   ))}
                 </View>
+
+                {/* 지출 분류 */}
+                <Text style={styles.inputLabel}>지출 분류</Text>
+                <View style={styles.expenseTypeRow}>
+                  {[
+                    { key: 'shared',    label: '💰 공금',     desc: '모두가 분담' },
+                    { key: 'personal',  label: '👤 개인',     desc: '내가 결제' },
+                    { key: 'selective', label: '👥 선택',     desc: '일부 인원' },
+                  ].map(t => {
+                    const active = expenseType === t.key;
+                    return (
+                      <TouchableOpacity
+                        key={t.key}
+                        style={[styles.typePill, active && styles.typePillActive]}
+                        onPress={() => setExpenseType(t.key)}
+                      >
+                        <Text style={[styles.typePillLabel, active && styles.typePillLabelActive]}>{t.label}</Text>
+                        <Text style={[styles.typePillDesc, active && styles.typePillDescActive]}>{t.desc}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* 선택지출 — 멤버 선택 */}
+                {expenseType === 'selective' && (
+                  <>
+                    <Text style={styles.inputLabel}>결제 인원 선택 ({selectedPayers.length}/{members.length})</Text>
+                    <View style={styles.memberPickerRow}>
+                      {members.length === 0 ? (
+                        <Text style={{ color: '#888', fontSize: 13, paddingVertical: 10 }}>
+                          여행 멤버가 없습니다.
+                        </Text>
+                      ) : members.map(uid => {
+                        const checked = selectedPayers.includes(uid);
+                        const name = memberProfiles[uid]?.nickname || (uid === user.uid ? '나' : '?');
+                        return (
+                          <TouchableOpacity
+                            key={uid}
+                            style={[styles.memberChip, checked && styles.memberChipActive]}
+                            onPress={() => togglePayer(uid)}
+                          >
+                            <Text style={[styles.memberChipText, checked && styles.memberChipTextActive]}>
+                              {checked ? '✓ ' : ''}{name}
+                              {uid === user.uid ? ' (나)' : ''}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                )}
+
                 <View style={styles.modalBtns}>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => setAddModal(false)}>
                     <Text style={styles.cancelBtnText}>취소</Text>
@@ -772,6 +983,39 @@ const styles = StyleSheet.create({
   },
   catChipLabel: { color: '#aaa', fontSize: 11, marginBottom: 2 },
   catChipVal:   { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+
+  myBreakdown: {
+    backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 12, padding: 12,
+    marginTop: 4,
+  },
+  myBreakdownRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
+  myBreakdownLabel:  { color: '#bbb', fontSize: 12 },
+  myBreakdownVal:    { color: '#fff', fontSize: 13, fontWeight: '600' },
+  myBreakdownDivider:{ height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginVertical: 6 },
+  myBreakdownTotalLabel:{ color: '#e94560', fontSize: 13, fontWeight: 'bold' },
+  myBreakdownTotalVal:  { color: '#e94560', fontSize: 16, fontWeight: 'bold' },
+
+  expenseTypeRow:    { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  typePill: {
+    flex: 1, backgroundColor: '#0f3460', borderRadius: 10,
+    paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center',
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  typePillActive:    { borderColor: '#e94560', backgroundColor: 'rgba(233,69,96,0.15)' },
+  typePillLabel:     { color: '#aaa', fontSize: 13, fontWeight: 'bold', marginBottom: 2 },
+  typePillLabelActive:{ color: '#e94560' },
+  typePillDesc:      { color: '#666', fontSize: 10 },
+  typePillDescActive:{ color: '#e94560' },
+
+  memberPickerRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 },
+  memberChip: {
+    backgroundColor: '#0f3460', borderRadius: 16,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderWidth: 1, borderColor: '#0f3460',
+  },
+  memberChipActive:  { backgroundColor: 'rgba(233,69,96,0.18)', borderColor: '#e94560' },
+  memberChipText:    { color: '#aaa', fontSize: 13 },
+  memberChipTextActive:{ color: '#e94560', fontWeight: 'bold' },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   sectionTitle:  { color: '#fff', fontSize: 15, fontWeight: 'bold' },
@@ -935,6 +1179,9 @@ const cStyles = StyleSheet.create({
   schedBadgeText: { color: '#4a9eff', fontSize: 10 },
   cashBadge:  { backgroundColor: 'rgba(74,255,145,0.15)', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8 },
   cashBadgeText: { color: '#4aff91', fontSize: 10 },
+  typeBadge:  { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, borderWidth: 1 },
+  typeBadgeText: { fontSize: 10, fontWeight: 'bold' },
+  payersLabel:{ color: '#888', fontSize: 11, marginTop: 2 },
   costTitle:  { color: '#fff', fontSize: 14 },
   costDate:   { color: '#666', fontSize: 11, marginTop: 2 },
   costRight:  { alignItems: 'flex-end' },
