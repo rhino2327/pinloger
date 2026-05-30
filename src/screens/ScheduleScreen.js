@@ -17,6 +17,7 @@ import { TRANSPORTS } from '../utils/transport';
 const HOURS     = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
 const MINUTES   = ['00', '10', '20', '30', '40', '50'];
 const CURRENCIES = ['KRW', 'USD', 'JPY', 'EUR', 'CNY', 'THB', 'VND', 'GBP'];
+const CATEGORIES = ['숙소', '교통', '식비', '관광', '쇼핑', '기타'];
 
 function getDuration(startTime, endTime, crossDay = false) {
   if (!startTime || !endTime) return null;
@@ -102,7 +103,7 @@ const EMPTY_FORM = {
   hour: '09', minute: '00', useTime: true,
   endHour: '10', endMinute: '00', useEndTime: false,
   crossDay: false, // 다음 날까지 이어지는 일정
-  transport: '', cost: '', currency: 'KRW',
+  transport: '', cost: '', currency: 'KRW', category: '기타', prepaid: false,
   flightNumber: '', flightStatus: '', flightDelay: 0, airline: '', checkInMins: 120,
   depAirport: '', depIata: '', depTerminal: '', depGate: '', depCheckInDesk: '',
   arrAirport: '', arrIata: '', arrTerminal: '', arrGate: '',
@@ -499,7 +500,28 @@ export default function ScheduleScreen({ route }) {
   const openAdd = () => {
     setEditingId(null);
     setSelectedDay(activeDay);
-    setForm(EMPTY_FORM);
+    // 현재 선택된 날의 마지막 일정 종료시간을 기본 시작시간으로
+    const sameDay = schedules.filter(s => (s.date === activeDay) && s.time);
+    let initHour = EMPTY_FORM.hour, initMin = EMPTY_FORM.minute;
+    if (sameDay.length > 0) {
+      // 가장 늦은 종료시간(없으면 시작시간 + 1시간) 찾기
+      let latestMin = -1;
+      sameDay.forEach(s => {
+        const t = s.endTime || s.time;
+        const [h, m] = t.split(':').map(Number);
+        const mm = h * 60 + m;
+        if (mm > latestMin) latestMin = mm;
+      });
+      if (latestMin >= 0 && latestMin < 24 * 60) {
+        // 분을 10분 단위로 올림
+        const rounded = Math.ceil(latestMin / 10) * 10;
+        const h = Math.floor(rounded / 60) % 24;
+        const m = rounded % 60;
+        initHour = String(h).padStart(2, '0');
+        initMin  = String(m).padStart(2, '0');
+      }
+    }
+    setForm({ ...EMPTY_FORM, hour: initHour, minute: initMin });
     setFromQuery(''); setFromResults([]); setShowFrom(false);
     setToQuery('');   setToResults([]);   setShowTo(false);
     setModalVisible(true);
@@ -534,6 +556,8 @@ export default function ScheduleScreen({ route }) {
       transport:    item.transport    || '',
       cost:         item.cost ? String(item.cost) : '',
       currency:     item.currency     || 'KRW',
+      category:     item.category     || '기타',
+      prepaid:      !!item.prepaid,
       flightNumber:   item.flightNumber    || '',
       flightStatus:   item.flightStatus    || '',
       flightDelay:    item.flightDelay     || 0,
@@ -618,6 +642,8 @@ export default function ScheduleScreen({ route }) {
       transport:        form.transport,
       cost:             form.cost ? Number(form.cost) : 0,
       currency:         form.currency,
+      category:         form.category || '기타',
+      prepaid:          !!form.prepaid,
       flightNumber:     form.transport === '✈️' ? (form.flightNumber    || '') : '',
       flightStatus:     form.transport === '✈️' ? (form.flightStatus    || '') : '',
       flightDelay:      form.transport === '✈️' ? (form.flightDelay     || 0)  : 0,
@@ -924,9 +950,9 @@ export default function ScheduleScreen({ route }) {
                     <View style={styles.timeRowWrap}>
                       <Text style={styles.timeLabelTxt}>시작</Text>
                       <View style={styles.pickerRow}>
-                        <ScrollPicker items={HOURS}   selectedValue={form.hour}   onValueChange={v => setField('hour', v)}   width={60} />
+                        <ScrollPicker items={HOURS}   selectedValue={form.hour}   onValueChange={v => setField('hour', v)}   width={80} />
                         <Text style={styles.sep}>시</Text>
-                        <ScrollPicker items={MINUTES} selectedValue={form.minute} onValueChange={v => setField('minute', v)} width={60} />
+                        <ScrollPicker items={MINUTES} selectedValue={form.minute} onValueChange={v => setField('minute', v)} width={80} />
                         <Text style={styles.sep}>분</Text>
                       </View>
                       <TouchableOpacity
@@ -945,9 +971,9 @@ export default function ScheduleScreen({ route }) {
                         <View style={styles.timeRowWrap}>
                           <Text style={styles.timeLabelTxt}>종료</Text>
                           <View style={styles.pickerRow}>
-                            <ScrollPicker items={HOURS}   selectedValue={form.endHour}   onValueChange={v => setField('endHour', v)}   width={60} />
+                            <ScrollPicker items={HOURS}   selectedValue={form.endHour}   onValueChange={v => setField('endHour', v)}   width={80} />
                             <Text style={styles.sep}>시</Text>
-                            <ScrollPicker items={MINUTES} selectedValue={form.endMinute} onValueChange={v => setField('endMinute', v)} width={60} />
+                            <ScrollPicker items={MINUTES} selectedValue={form.endMinute} onValueChange={v => setField('endMinute', v)} width={80} />
                             <Text style={styles.sep}>분</Text>
                           </View>
                         </View>
@@ -1147,6 +1173,30 @@ export default function ScheduleScreen({ route }) {
                   </ScrollView>
                 </View>
 
+                {/* 카테고리 + 사전결제 (비용이 있을 때만) */}
+                {form.cost ? (
+                  <>
+                    <Text style={[styles.inputLabel, { marginTop: 12 }]}>카테고리</Text>
+                    <View style={styles.categoryRow}>
+                      {CATEGORIES.map(cat => (
+                        <TouchableOpacity key={cat}
+                          style={[styles.catChip, form.category === cat && styles.catChipActive]}
+                          onPress={() => setField('category', cat)}>
+                          <Text style={[styles.catChipText, form.category === cat && styles.catChipTextActive]}>{cat}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.prepaidBtn, form.prepaid && styles.prepaidBtnOn]}
+                      onPress={() => setField('prepaid', !form.prepaid)}
+                    >
+                      <Text style={[styles.prepaidTxt, form.prepaid && styles.prepaidTxtOn]}>
+                        {form.prepaid ? '✓ 사전 결제됨 — 지갑/환전 차감 X' : '☐ 사전 결제 항목인가요?'}
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                ) : null}
+
                 <View style={styles.modalBtns}>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalVisible(false)}>
                     <Text style={styles.cancelBtnText}>취소</Text>
@@ -1333,6 +1383,15 @@ const styles = StyleSheet.create({
   currencyChipActive:    { backgroundColor: '#e94560', borderColor: '#e94560' },
   currencyChipText:      { color: '#aaa', fontSize: 12 },
   currencyChipTextActive:{ color: '#fff' },
+  categoryRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  catChip:        { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#0f3460', backgroundColor: '#0f3460' },
+  catChipActive:  { backgroundColor: '#e94560', borderColor: '#e94560' },
+  catChipText:    { color: '#aaa', fontSize: 12 },
+  catChipTextActive:{ color: '#fff', fontWeight: 'bold' },
+  prepaidBtn:     { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#0f3460', borderStyle: 'dashed', borderRadius: 10, padding: 10, alignItems: 'center', marginBottom: 8 },
+  prepaidBtnOn:   { backgroundColor: 'rgba(255,201,71,0.12)', borderColor: '#ffc947', borderStyle: 'solid' },
+  prepaidTxt:     { color: '#aaa', fontSize: 12, fontWeight: 'bold' },
+  prepaidTxtOn:   { color: '#ffc947' },
   modalBtns:  { flexDirection: 'row', gap: 10, marginTop: 4 },
   cancelBtn:  { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#0f3460', alignItems: 'center' },
   cancelBtnText: { color: '#aaa', fontSize: 15 },

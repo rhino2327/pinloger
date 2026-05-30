@@ -36,6 +36,7 @@ const EXPENSE_TYPE_INFO = {
 function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExchange, memberProfiles, currentUid }) {
   const expType = item.expenseType || 'shared';
   const typeInfo = EXPENSE_TYPE_INFO[expType] || EXPENSE_TYPE_INFO.shared;
+  const isEditable = item.source === 'manual' || item.source === 'schedule'; // 둘 다 수정 가능
   const payersLabel = (() => {
     if (expType === 'shared') return null;
     if (expType === 'personal') {
@@ -63,16 +64,19 @@ function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExcha
 
   return (
     <View style={cStyles.cardWrapper}>
-      {editMode && isManual && (
+      {editMode && isEditable && (
         <View style={cStyles.actionRow}>
           <TouchableOpacity style={cStyles.editBtn} onPress={() => onEdit(item)}>
             <Text style={cStyles.editBtnIcon}>✏️</Text>
             <Text style={cStyles.editBtnText}>수정</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={cStyles.deleteBtn} onPress={() => onDelete(item.id)}>
-            <Text style={cStyles.deleteBtnIcon}>🗑</Text>
-            <Text style={cStyles.deleteBtnText}>삭제</Text>
-          </TouchableOpacity>
+          {/* 일정 출처는 삭제 불가 (일정 자체를 지워야 함) */}
+          {item.source === 'manual' && (
+            <TouchableOpacity style={cStyles.deleteBtn} onPress={() => onDelete(item.id)}>
+              <Text style={cStyles.deleteBtnIcon}>🗑</Text>
+              <Text style={cStyles.deleteBtnText}>삭제</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
       <Animated.View style={{ transform: [{ translateX }] }}>
@@ -88,6 +92,9 @@ function CostItemCard({ item, editMode, onEdit, onDelete, symOf, toKRW, hasExcha
               )}
               {hasExchange && (
                 <View style={cStyles.cashBadge}><Text style={cStyles.cashBadgeText}>👛 지갑</Text></View>
+              )}
+              {item.prepaid && (
+                <View style={cStyles.prepaidBadge}><Text style={cStyles.prepaidBadgeText}>💳 사전결제</Text></View>
               )}
             </View>
             <Text style={cStyles.costTitle}>{item.title}</Text>
@@ -135,6 +142,8 @@ export default function CostScreen({ route }) {
   const [costDate,       setCostDate]       = useState('');
   const [expenseType,    setExpenseType]    = useState('shared'); // shared | personal | selective
   const [selectedPayers, setSelectedPayers] = useState([]);       // selective: uids
+  const [prepaid,        setPrepaid]        = useState(false);    // 사전 결제: 지갑/환전에서 차감 X
+  const [editingSource,  setEditingSource]  = useState('manual');  // 'manual' | 'schedule'
 
   // 지출 타입 필터
   const [typeFilter, setTypeFilter] = useState('all'); // all | shared | personal | selective
@@ -249,6 +258,7 @@ export default function CostScreen({ route }) {
 
   const spentByCurrency = {};
   allCosts.forEach(c => {
+    if (c.prepaid) return; // 사전 결제는 지갑/환전 차감 X
     const cur = c.currency || 'KRW';
     const amt = c.cost || c.amount || 0;
     spentByCurrency[cur] = (spentByCurrency[cur] || 0) + Number(amt);
@@ -355,10 +365,12 @@ export default function CostScreen({ route }) {
     setCostDate(nowDateStr());
     setExpenseType('shared');
     setSelectedPayers([]);
+    setPrepaid(false);
     setAddModal(true);
   };
   const openEditModal = (item) => {
     setEditingCostId(item.id);
+    setEditingSource(item.source || 'manual');
     setTitle(item.title || '');
     setAmount(String(item.amount || item.cost || ''));
     setCurrency(item.currency || 'KRW');
@@ -366,6 +378,7 @@ export default function CostScreen({ route }) {
     setCostDate(item.date || nowDateStr());
     setExpenseType(item.expenseType || 'shared');
     setSelectedPayers(item.selectedPayers || []);
+    setPrepaid(!!item.prepaid);
     setAddModal(true);
   };
   const togglePayer = (uid) => {
@@ -387,14 +400,23 @@ export default function CostScreen({ route }) {
       expenseType,
       personalUid:    expenseType === 'personal'  ? user.uid : null,
       selectedPayers: expenseType === 'selective' ? selectedPayers : [],
+      prepaid,
     };
     try {
       if (editingCostId) {
-        await updateDoc(doc(db, 'costs', editingCostId), {
-          title: title.trim(), amount: Number(amount), currency, category,
-          date: costDate || null, dayLabel,
-          ...expenseFields,
-        });
+        if (editingSource === 'schedule') {
+          // 일정 비용: schedules 컬렉션의 cost/currency/category/prepaid 필드 업데이트
+          await updateDoc(doc(db, 'schedules', editingCostId), {
+            cost: Number(amount),
+            currency, category, prepaid,
+          });
+        } else {
+          await updateDoc(doc(db, 'costs', editingCostId), {
+            title: title.trim(), amount: Number(amount), currency, category,
+            date: costDate || null, dayLabel,
+            ...expenseFields,
+          });
+        }
       } else {
         await addDoc(collection(db, 'costs'), {
           tripId: trip.id, title: title.trim(),
@@ -405,7 +427,7 @@ export default function CostScreen({ route }) {
         });
       }
       setTitle(''); setAmount(''); setCurrency('KRW'); setCategory('기타');
-      setCostDate(''); setExpenseType('shared'); setSelectedPayers([]);
+      setCostDate(''); setExpenseType('shared'); setSelectedPayers([]); setPrepaid(false);
       setEditingCostId(null); setAddModal(false);
     } catch (e) {
       Alert.alert('오류', '비용 저장에 실패했어요. 다시 시도해주세요.');
@@ -833,6 +855,16 @@ export default function CostScreen({ route }) {
                   })}
                 </View>
 
+                {/* 사전 결제 토글 */}
+                <TouchableOpacity
+                  style={[styles.prepaidBtn, prepaid && styles.prepaidBtnOn]}
+                  onPress={() => setPrepaid(!prepaid)}
+                >
+                  <Text style={[styles.prepaidTxt, prepaid && styles.prepaidTxtOn]}>
+                    {prepaid ? '✓ 사전 결제됨 — 지갑/환전 차감 X' : '☐ 사전 결제 항목인가요?'}
+                  </Text>
+                </TouchableOpacity>
+
                 {/* 선택지출 — 멤버 선택 */}
                 {expenseType === 'selective' && (
                   <>
@@ -1017,6 +1049,15 @@ const styles = StyleSheet.create({
   memberChipText:    { color: '#aaa', fontSize: 13 },
   memberChipTextActive:{ color: '#e94560', fontWeight: 'bold' },
 
+  prepaidBtn: {
+    backgroundColor: 'transparent',
+    borderWidth: 1, borderColor: '#0f3460', borderStyle: 'dashed',
+    borderRadius: 10, padding: 10, alignItems: 'center', marginBottom: 14,
+  },
+  prepaidBtnOn: { backgroundColor: 'rgba(255,201,71,0.12)', borderColor: '#ffc947', borderStyle: 'solid' },
+  prepaidTxt:   { color: '#aaa', fontSize: 12, fontWeight: 'bold' },
+  prepaidTxtOn: { color: '#ffc947' },
+
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   sectionTitle:  { color: '#fff', fontSize: 15, fontWeight: 'bold' },
   addCashBtn:     { backgroundColor: '#0f3460', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16 },
@@ -1181,6 +1222,8 @@ const cStyles = StyleSheet.create({
   cashBadgeText: { color: '#4aff91', fontSize: 10 },
   typeBadge:  { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, borderWidth: 1 },
   typeBadgeText: { fontSize: 10, fontWeight: 'bold' },
+  prepaidBadge: { backgroundColor: 'rgba(255,201,71,0.18)', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8 },
+  prepaidBadgeText: { color: '#ffc947', fontSize: 10 },
   payersLabel:{ color: '#888', fontSize: 11, marginTop: 2 },
   costTitle:  { color: '#fff', fontSize: 14 },
   costDate:   { color: '#666', fontSize: 11, marginTop: 2 },

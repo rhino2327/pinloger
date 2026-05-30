@@ -35,7 +35,7 @@ export default function TripDetailScreen({ route }) {
       <Tab.Screen
         name="Members"
         component={MembersScreen}
-        options={{ tabBarLabel: '멤버' }}
+        options={{ tabBarLabel: '설정' }}
         initialParams={{ trip }}
       />
     </Tab.Navigator>

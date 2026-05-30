@@ -1,5 +1,19 @@
 {
   "enabledPlugins": {
     "expo@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /Users/simjaehun/Desktop/test/TravelApp && git diff --quiet && git diff --cached --quiet || (git add . && git commit -m 'auto: claude changes' && git push) 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "변경사항 GitHub에 자동 push 중..."
+          }
+        ]
+      }
+    ]
   }
 }
