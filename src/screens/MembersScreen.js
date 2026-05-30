@@ -129,10 +129,30 @@ export default function MembersScreen({ route }) {
       const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}`
         + (waypointsArr.length > 0 ? `&waypoints=${waypointsArr.join('|')}` : '')
         + `&travelmode=driving`;
-      await Share.share({
-        message: `🗺 ${tripData.name} 여행 동선\n${url}`,
-        url,
-      });
+      Alert.alert(
+        '🗺 여행 동선',
+        `${dedup.length}개 지점의 동선이 정리됐어요.\n구글맵에서 열거나 공유할 수 있어요.`,
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '공유',
+            onPress: () => Share.share({
+              message: `🗺 ${tripData.name} 여행 동선\n${url}`,
+              url,
+            }).catch(() => {}),
+          },
+          {
+            text: '구글맵 열기',
+            onPress: async () => {
+              try {
+                await Linking.openURL(url);
+              } catch {
+                Alert.alert('오류', '구글맵을 열 수 없어요.');
+              }
+            },
+          },
+        ],
+      );
     } catch (e) {
       Alert.alert('오류', '동선을 만드는 중 문제가 발생했어요.');
     }

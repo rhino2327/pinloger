@@ -7,7 +7,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   collection, addDoc, onSnapshot, query, where,
-  serverTimestamp, deleteDoc, doc, updateDoc
+  serverTimestamp, deleteDoc, doc, updateDoc, getDoc
 } from 'firebase/firestore';
 import { db, auth, functions } from '../config/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -294,6 +294,36 @@ export default function ScheduleScreen({ route }) {
   const canEdit = ['owner', 'editor'].includes(trip.memberRoles?.[user.uid]);
   const tripDays = getTripDays(trip.startDate, trip.endDate);
   const [activeDay, setActiveDay] = useState(tripDays[0]?.date || null);
+
+  // ── 멤버 프로필 (선택결제 인원 표시용) ──
+  const members = trip.members || [];
+  const [memberProfiles, setMemberProfiles] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const profiles = {};
+      await Promise.all(members.map(async (uid) => {
+        try {
+          const snap = await getDoc(doc(db, 'users', uid));
+          if (snap.exists()) profiles[uid] = snap.data();
+        } catch {}
+      }));
+      if (!cancelled) setMemberProfiles(profiles);
+    })();
+    return () => { cancelled = true; };
+  }, [members.join(',')]);
+
+  const togglePayer = (uid) => {
+    setForm(f => {
+      const list = f.selectedPayers || [];
+      return {
+        ...f,
+        selectedPayers: list.includes(uid)
+          ? list.filter(u => u !== uid)
+          : [...list, uid],
+      };
+    });
+  };
 
   // ── 출발지 검색 상태 ──
   const [fromQuery,     setFromQuery]     = useState('');
@@ -603,6 +633,12 @@ export default function ScheduleScreen({ route }) {
       }
     }
 
+    // ── 선택 결제 인원 검사 ──
+    if (form.cost && form.expenseType === 'selective' && (form.selectedPayers || []).length === 0) {
+      Alert.alert('알림', '선택 결제는 결제 인원을 1명 이상 선택해주세요.');
+      return;
+    }
+
     // ── 겹침 검사 ──
     if (form.useTime) {
       const newItem = { date: selectedDay, endDate, time: startTime, endTime };
@@ -861,21 +897,30 @@ export default function ScheduleScreen({ route }) {
                     )}
                   </View>
 
-                  {/* 이동수단 */}
-                  {item.transport && (
-                    <TouchableOpacity
-                      style={styles.transportBadge}
-                      onPress={() => item.flightNumber ? setFlightDetailItem(item) : null}
-                      activeOpacity={item.flightNumber ? 0.7 : 1}
-                    >
-                      <Text style={styles.transportText}>
-                        {TRANSPORTS.find(t => t.emoji === item.transport)?.emoji}{' '}
-                        {TRANSPORTS.find(t => t.emoji === item.transport)?.label}
-                        {item.flightNumber ? `  ${item.flightNumber}` : ''}
-                        {item.flightNumber ? '  ›' : ''}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
+                  {/* 이동수단 — 비행기는 항공편 상세, 그 외엔 길찾기 */}
+                  {item.transport && (() => {
+                    const isFlight  = item.transport === '✈️';
+                    const canRoute  = !isFlight && hasFrom && hasTo;
+                    const tappable  = !!item.flightNumber || canRoute;
+                    return (
+                      <TouchableOpacity
+                        style={styles.transportBadge}
+                        onPress={() => {
+                          if (item.flightNumber) setFlightDetailItem(item);
+                          else if (canRoute) openDirections(item);
+                        }}
+                        activeOpacity={tappable ? 0.7 : 1}
+                      >
+                        <Text style={styles.transportText}>
+                          {TRANSPORTS.find(t => t.emoji === item.transport)?.emoji}{' '}
+                          {TRANSPORTS.find(t => t.emoji === item.transport)?.label}
+                          {item.flightNumber ? `  ${item.flightNumber}` : ''}
+                          {canRoute ? '  길찾기' : ''}
+                          {tappable ? '  ›' : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })()}
 
                   {/* 출발→도착 이동시간 (구글맵 기준) */}
                   {hasFrom && hasTo && routeInfo[item.id] && (
@@ -1270,12 +1315,33 @@ export default function ScheduleScreen({ route }) {
                         );
                       })}
                     </View>
-                    {/* 선택 결제 시 멤버 선택 안내 — UI는 비용 화면에서 변경 권장 */}
+                    {/* 선택 결제 — 결제 인원 선택 */}
                     {form.expenseType === 'selective' && (
                       <View style={{ marginBottom: 10 }}>
-                        <Text style={{ color: '#888', fontSize: 11 }}>
-                          ※ 선택 결제 인원은 비용 탭의 해당 일정 항목에서 편집할 수 있어요.
+                        <Text style={[styles.inputLabel, { marginTop: 0 }]}>
+                          결제 인원 선택 ({(form.selectedPayers || []).length}/{members.length})
                         </Text>
+                        <View style={styles.memberPickerRow}>
+                          {members.length === 0 ? (
+                            <Text style={{ color: '#888', fontSize: 13, paddingVertical: 6 }}>
+                              여행 멤버가 없습니다.
+                            </Text>
+                          ) : members.map(uid => {
+                            const checked = (form.selectedPayers || []).includes(uid);
+                            const name = memberProfiles[uid]?.nickname || (uid === user.uid ? '나' : '?');
+                            return (
+                              <TouchableOpacity
+                                key={uid}
+                                style={[styles.memberChip, checked && styles.memberChipActive]}
+                                onPress={() => togglePayer(uid)}
+                              >
+                                <Text style={[styles.memberChipText, checked && styles.memberChipTextActive]}>
+                                  {checked ? '✓ ' : ''}{name}{uid === user.uid ? ' (나)' : ''}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
                       </View>
                     )}
 
@@ -1488,6 +1554,11 @@ const styles = StyleSheet.create({
   catChipActive:  { backgroundColor: '#e94560', borderColor: '#e94560' },
   catChipText:    { color: '#aaa', fontSize: 12 },
   catChipTextActive:{ color: '#fff', fontWeight: 'bold' },
+  memberPickerRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
+  memberChip:       { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: '#0f3460', backgroundColor: '#0f3460' },
+  memberChipActive: { backgroundColor: 'rgba(233,69,96,0.18)', borderColor: '#e94560' },
+  memberChipText:   { color: '#aaa', fontSize: 13 },
+  memberChipTextActive:{ color: '#e94560', fontWeight: 'bold' },
   prepaidBtn:     { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#0f3460', borderStyle: 'dashed', borderRadius: 10, padding: 10, alignItems: 'center', marginBottom: 8 },
   prepaidBtnOn:   { backgroundColor: 'rgba(255,201,71,0.12)', borderColor: '#ffc947', borderStyle: 'solid' },
   prepaidTxt:     { color: '#aaa', fontSize: 12, fontWeight: 'bold' },
