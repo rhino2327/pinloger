@@ -116,6 +116,9 @@ export default function ExchangeScreen() {
   const [tripCostsData, setTripCostsData] = useState({});
   const costUnsubsRef = useRef([]);
 
+  // ── 지갑 → 여행 가져오기 이체 기록 ──
+  const [transfers, setTransfers] = useState([]);
+
   useEffect(() => {
     fetchRates();
     if (!user) return;
@@ -129,7 +132,11 @@ export default function ExchangeScreen() {
     const u2 = onSnapshot(q2, (snap) => {
       setUserTrips(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (e) => console.warn('trips', e));
-    return () => { u1(); u2(); };
+    const q3 = query(collection(db, 'walletTransfers'), where('uid', '==', user.uid));
+    const u3 = onSnapshot(q3, (snap) => {
+      setTransfers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (e) => console.warn('transfers', e));
+    return () => { u1(); u2(); u3(); };
   }, []);
 
   // ── 여행별 지출 구독 (수동 비용 + 일정 비용) ──
@@ -169,6 +176,52 @@ export default function ExchangeScreen() {
     setLinkTarget(item);
     setLinkShowAll(false);
     setLinkModalVisible(true);
+  };
+
+  // ── 가져오기 (부분 이체) 모달 ──
+  const [transferModalVisible, setTransferModalVisible] = useState(false);
+  const [transferSource, setTransferSource] = useState(null); // 환전 항목
+  const [transferAmount, setTransferAmount] = useState('');
+  const [transferTripId, setTransferTripId] = useState(null);
+
+  const openTransferModal = (item) => {
+    setTransferSource(item);
+    setTransferAmount('');
+    setTransferTripId(null);
+    setTransferModalVisible(true);
+  };
+
+  // 환전 항목별 이미 이체된 합계
+  const transferredAmount = (exchangeId) =>
+    transfers
+      .filter(t => t.sourceExchangeId === exchangeId)
+      .reduce((s, t) => s + (t.amount || 0), 0);
+
+  const handleTransfer = async () => {
+    if (!transferSource || !transferTripId) {
+      Alert.alert('알림', '여행을 선택해주세요.'); return;
+    }
+    const amt = parseFloat(transferAmount);
+    if (!amt || amt <= 0) { Alert.alert('알림', '금액을 입력해주세요.'); return; }
+    const max = (transferSource.foreignAmount || 0) - transferredAmount(transferSource.id);
+    if (amt > max) {
+      Alert.alert('알림', `최대 ${max.toLocaleString()} ${transferSource.currency}까지 가져올 수 있어요.`);
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'walletTransfers'), {
+        uid:              user.uid,
+        sourceExchangeId: transferSource.id,
+        tripId:           transferTripId,
+        currency:         transferSource.currency,
+        amount:           amt,
+        date:             todayStr(),
+        createdAt:        serverTimestamp(),
+      });
+      setTransferModalVisible(false);
+    } catch (e) {
+      Alert.alert('오류', '가져오기에 실패했어요.');
+    }
   };
 
   const linkToTrip = async (tripId) => {
@@ -518,6 +571,40 @@ export default function ExchangeScreen() {
               </View>
             )}
 
+            {/* ── 여행별 환전 요약 (가져오기 기준) ── */}
+            {transfers.length > 0 && (
+              <View style={styles.tripTransferSection}>
+                <Text style={styles.tripTransferTitle}>✈️ 여행별 환전금액 정리</Text>
+                {(() => {
+                  // tripId × currency 합산
+                  const grouped = {};
+                  transfers.forEach(t => {
+                    const key = `${t.tripId}::${t.currency}`;
+                    grouped[key] = (grouped[key] || 0) + (t.amount || 0);
+                  });
+                  // tripId별로 묶기
+                  const byTrip = {};
+                  Object.entries(grouped).forEach(([key, amt]) => {
+                    const [tid, cur] = key.split('::');
+                    if (!byTrip[tid]) byTrip[tid] = [];
+                    byTrip[tid].push({ cur, amt });
+                  });
+                  return Object.entries(byTrip).map(([tid, list]) => {
+                    const trip = userTrips.find(t => t.id === tid);
+                    return (
+                      <View key={tid} style={styles.tripTransferRow}>
+                        <Text style={styles.tripTransferFlag}>{trip?.flag || '🌍'}</Text>
+                        <Text style={styles.tripTransferName}>{trip?.name || '알 수 없는 여행'} :</Text>
+                        <Text style={styles.tripTransferAmt}>
+                          {list.map(({ cur, amt }) => `${formatForeign(amt, cur)} ${cur}`).join(', ')}
+                        </Text>
+                      </View>
+                    );
+                  });
+                })()}
+              </View>
+            )}
+
             {history.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Text style={styles.emptyIcon}>👛</Text>
@@ -650,9 +737,21 @@ export default function ExchangeScreen() {
                               </TouchableOpacity>
                             </View>
                           </View>
-                          <TouchableOpacity style={styles.linkTripBtn} onPress={() => openLinkModal(item)}>
-                            <Text style={styles.linkTripBtnText}>🔗 여행 연동하기</Text>
-                          </TouchableOpacity>
+                          <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginTop: 8, marginBottom: 8 }}>
+                            <TouchableOpacity style={[styles.linkTripBtn, { flex: 1, marginHorizontal: 0, marginTop: 0, marginBottom: 0 }]} onPress={() => openLinkModal(item)}>
+                              <Text style={styles.linkTripBtnText}>🔗 여행 연동</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.transferBtn, { flex: 1 }]}
+                              onPress={() => openTransferModal(item)}
+                            >
+                              <Text style={styles.transferBtnText}>
+                                💸 가져오기 {transferredAmount(item.id) > 0
+                                  ? `(잔여 ${(item.foreignAmount - transferredAmount(item.id)).toLocaleString()})`
+                                  : ''}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
                           <View style={styles.historyDivider} />
                           <View style={styles.historyBottom}>
                             <View style={styles.infoRow}>
@@ -766,6 +865,73 @@ export default function ExchangeScreen() {
             );
           })() : null}
         </View>
+      </Modal>
+
+      {/* ══ 가져오기 모달 ══ */}
+      <Modal visible={transferModalVisible} transparent animationType="slide">
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={styles.formOverlay}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <View style={[styles.formSheet, { paddingBottom: insets.bottom + 24 }]}>
+                <View style={styles.handle} />
+                <Text style={styles.formTitle}>💸 여행으로 가져오기</Text>
+                {transferSource && (() => {
+                  const max = (transferSource.foreignAmount || 0) - transferredAmount(transferSource.id);
+                  return (
+                    <>
+                      <Text style={styles.linkSubtitle}>
+                        잔여: {formatForeign(max, transferSource.currency)} {transferSource.currency}
+                      </Text>
+                      <Text style={styles.formLabel}>가져올 금액</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        value={transferAmount}
+                        onChangeText={setTransferAmount}
+                        keyboardType="numeric"
+                        placeholder={`예: ${Math.floor(max / 2).toLocaleString()}`}
+                        placeholderTextColor="#555"
+                      />
+                      <Text style={styles.formLabel}>대상 여행</Text>
+                      {userTrips.length === 0 ? (
+                        <Text style={{ color: '#888', fontSize: 13, marginBottom: 14 }}>등록된 여행이 없어요.</Text>
+                      ) : (
+                        <View style={{ marginBottom: 14, maxHeight: 240 }}>
+                          <ScrollView>
+                            {userTrips.map(t => (
+                              <TouchableOpacity
+                                key={t.id}
+                                style={[
+                                  styles.sheetItem,
+                                  transferTripId === t.id && { backgroundColor: 'rgba(233,69,96,0.15)' },
+                                ]}
+                                onPress={() => setTransferTripId(t.id)}
+                              >
+                                <Text style={styles.sheetFlag}>{t.flag || '🌍'}</Text>
+                                <View style={styles.sheetInfo}>
+                                  <Text style={styles.sheetCode}>{t.name}</Text>
+                                  <Text style={styles.sheetName}>{t.startDate || ''} ~ {t.endDate || ''}</Text>
+                                </View>
+                                {transferTripId === t.id && <Text style={styles.sheetCheck}>✓</Text>}
+                              </TouchableOpacity>
+                            ))}
+                          </ScrollView>
+                        </View>
+                      )}
+                      <View style={styles.formBtns}>
+                        <TouchableOpacity style={styles.cancelBtn} onPress={() => setTransferModalVisible(false)}>
+                          <Text style={styles.cancelText}>취소</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.confirmBtn} onPress={handleTransfer}>
+                          <Text style={styles.confirmText}>가져오기</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  );
+                })()}
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ══ 환전 추가/수정 폼 ══ */}
@@ -998,6 +1164,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f3460', alignItems: 'center',
   },
   linkShowAllText:{ color: '#4a9eff', fontSize: 13, fontWeight: 'bold' },
+  transferBtn:    {
+    backgroundColor: 'rgba(76,217,100,0.15)', borderWidth: 1, borderColor: 'rgba(76,217,100,0.4)',
+    borderRadius: 10, padding: 10, alignItems: 'center',
+  },
+  transferBtnText:{ color: '#4cd964', fontSize: 13, fontWeight: 'bold' },
+  tripTransferSection: {
+    backgroundColor: '#16213e', borderRadius: 12, padding: 14, marginBottom: 14,
+    borderWidth: 1, borderColor: '#0f3460',
+  },
+  tripTransferTitle: { color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
+  tripTransferRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: 5, gap: 6 },
+  tripTransferFlag:  { fontSize: 18 },
+  tripTransferName:  { color: '#aaa', fontSize: 13, flexShrink: 1 },
+  tripTransferAmt:   { color: '#4cd964', fontSize: 13, fontWeight: 'bold', marginLeft: 'auto' },
   historyDivider:{ height: 1, backgroundColor: '#0f3460' },
   historyBottom: { padding: 16, paddingTop: 12, gap: 6 },
   infoRow:       { flexDirection: 'row', justifyContent: 'space-between' },

@@ -181,6 +181,9 @@ export default function CostScreen({ route }) {
     return () => { cancelled = true; };
   }, [members.join(',')]);
 
+  // 공금 지갑(가져오기 트랜스퍼)
+  const [transfers, setTransfers] = useState([]);
+
   useEffect(() => {
     const q1 = query(collection(db, 'costs'), where('tripId', '==', trip.id));
     const unsub1 = onSnapshot(q1, snap =>
@@ -199,8 +202,13 @@ export default function CostScreen({ route }) {
       data.sort((a, b) => (a.date || '') > (b.date || '') ? -1 : 1);
       setExchanges(data);
     });
+    // 공금 지갑 (지갑에서 가져온 금액)
+    const q4 = query(collection(db, 'walletTransfers'), where('tripId', '==', trip.id));
+    const unsub4 = onSnapshot(q4, snap => {
+      setTransfers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
     fetchRates();
-    return () => { unsub1(); unsub2(); unsub3(); };
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   // jsDelivr CDN — CORS 없음, 브라우저/웹앱 모두 동작
@@ -554,6 +562,45 @@ export default function CostScreen({ route }) {
             </ScrollView>
           )}
         </View>
+
+        {/* ── 공금 지갑 (가져오기로 들어온 금액) ── */}
+        {transfers.length > 0 && (() => {
+          // currency × {transferred, spent}
+          const byCur = {};
+          transfers.forEach(t => {
+            if (!byCur[t.currency]) byCur[t.currency] = { transferred: 0, spent: 0 };
+            byCur[t.currency].transferred += t.amount || 0;
+          });
+          // 사용: 비용 항목 중 같은 통화의 prepaid 아닌 것
+          allCosts.forEach(c => {
+            if (c.prepaid) return;
+            const cur = c.currency || 'KRW';
+            if (byCur[cur]) byCur[cur].spent += Number(c.cost || c.amount || 0);
+          });
+          return (
+            <View style={styles.sharedWalletCard}>
+              <Text style={styles.sharedWalletTitle}>💰 공금 지갑</Text>
+              <Text style={styles.sharedWalletHint}>환율 지갑에서 가져온 금액 — 사용액과 잔액 자동 계산</Text>
+              {Object.entries(byCur).map(([cur, { transferred, spent }]) => {
+                const remaining = transferred - spent;
+                const isOver    = remaining < 0;
+                return (
+                  <View key={cur} style={styles.sharedWalletRow}>
+                    <Text style={styles.sharedWalletCur}>{flagOf(cur)} {cur}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sharedWalletDetail}>
+                        가져옴 {symOf(cur)}{transferred.toLocaleString()}  ·  사용 {symOf(cur)}{spent.toLocaleString()}
+                      </Text>
+                      <Text style={[styles.sharedWalletRemain, isOver && { color: '#e94560' }]}>
+                        {isOver ? '⚠️ 초과 ' : '잔액 '}{symOf(cur)}{Math.abs(remaining).toLocaleString()}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
 
         {/* ── 환전 금액 관리 ── */}
         <View style={styles.sectionHeader}>
@@ -1049,6 +1096,16 @@ const styles = StyleSheet.create({
   memberChipText:    { color: '#aaa', fontSize: 13 },
   memberChipTextActive:{ color: '#e94560', fontWeight: 'bold' },
 
+  sharedWalletCard: {
+    backgroundColor: '#16213e', borderRadius: 12, padding: 14,
+    marginBottom: 16, borderWidth: 1, borderColor: 'rgba(76,217,100,0.3)',
+  },
+  sharedWalletTitle: { color: '#4cd964', fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+  sharedWalletHint:  { color: '#666', fontSize: 11, marginBottom: 10 },
+  sharedWalletRow:   { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+  sharedWalletCur:   { color: '#fff', fontSize: 13, fontWeight: 'bold', minWidth: 70 },
+  sharedWalletDetail:{ color: '#aaa', fontSize: 11 },
+  sharedWalletRemain:{ color: '#4cd964', fontSize: 14, fontWeight: 'bold' },
   prepaidBtn: {
     backgroundColor: 'transparent',
     borderWidth: 1, borderColor: '#0f3460', borderStyle: 'dashed',
