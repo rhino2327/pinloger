@@ -147,6 +147,8 @@ export default function CostScreen({ route }) {
 
   // 지출 타입 필터
   const [typeFilter, setTypeFilter] = useState('all'); // all | shared | personal | selective
+  // 카테고리 필터
+  const [categoryFilter, setCategoryFilter] = useState('all'); // all | 숙소 | 교통 | ...
 
   // 멤버 프로필 (uid → { nickname, avatar, ... })
   const [memberProfiles, setMemberProfiles] = useState({});
@@ -343,6 +345,10 @@ export default function CostScreen({ route }) {
     // 타입 필터
     if (typeFilter !== 'all') {
       list = list.filter(c => typeOf(c) === typeFilter);
+    }
+    // 카테고리 필터
+    if (categoryFilter !== 'all') {
+      list = list.filter(c => (c.category || '기타') === categoryFilter);
     }
     list.sort((a, b) => (a.date || '') > (b.date || '') ? 1 : -1);
     if (activeTab === 'all') return list;
@@ -773,6 +779,26 @@ export default function CostScreen({ route }) {
               onPress={() => setTypeFilter(key)}
             >
               <Text style={[styles.filterText, typeFilter === key && styles.filterTextActive]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* 카테고리 필터 */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterRow}
+          contentContainerStyle={{ paddingRight: 8 }}
+        >
+          {[{ key: 'all', label: '🗂 전체' }, ...CATEGORIES.map(c => ({ key: c, label: c }))].map(({ key, label }) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.filterBtn, categoryFilter === key && styles.filterBtnActive]}
+              onPress={() => setCategoryFilter(key)}
+            >
+              <Text style={[styles.filterText, categoryFilter === key && styles.filterTextActive]}>
                 {label}
               </Text>
             </TouchableOpacity>

@@ -104,6 +104,7 @@ const EMPTY_FORM = {
   endHour: '10', endMinute: '00', useEndTime: false,
   crossDay: false, // 다음 날까지 이어지는 일정
   transport: '', cost: '', currency: 'KRW', category: '기타', prepaid: false,
+  expenseType: 'shared', selectedPayers: [],
   flightNumber: '', flightStatus: '', flightDelay: 0, airline: '', checkInMins: 120,
   depAirport: '', depIata: '', depTerminal: '', depGate: '', depCheckInDesk: '',
   arrAirport: '', arrIata: '', arrTerminal: '', arrGate: '',
@@ -558,6 +559,8 @@ export default function ScheduleScreen({ route }) {
       currency:     item.currency     || 'KRW',
       category:     item.category     || '기타',
       prepaid:      !!item.prepaid,
+      expenseType:  item.expenseType  || 'shared',
+      selectedPayers: item.selectedPayers || [],
       flightNumber:   item.flightNumber    || '',
       flightStatus:   item.flightStatus    || '',
       flightDelay:    item.flightDelay     || 0,
@@ -644,6 +647,9 @@ export default function ScheduleScreen({ route }) {
       currency:         form.currency,
       category:         form.category || '기타',
       prepaid:          !!form.prepaid,
+      expenseType:      form.expenseType || 'shared',
+      personalUid:      form.expenseType === 'personal'  ? user.uid : null,
+      selectedPayers:   form.expenseType === 'selective' ? (form.selectedPayers || []) : [],
       flightNumber:     form.transport === '✈️' ? (form.flightNumber    || '') : '',
       flightStatus:     form.transport === '✈️' ? (form.flightStatus    || '') : '',
       flightDelay:      form.transport === '✈️' ? (form.flightDelay     || 0)  : 0,
@@ -1231,7 +1237,7 @@ export default function ScheduleScreen({ route }) {
                   </ScrollView>
                 </View>
 
-                {/* 카테고리 + 사전결제 (비용이 있을 때만) */}
+                {/* 카테고리 + 분류 + 사전결제 (비용이 있을 때만) */}
                 {form.cost ? (
                   <>
                     <Text style={[styles.inputLabel, { marginTop: 12 }]}>카테고리</Text>
@@ -1244,6 +1250,35 @@ export default function ScheduleScreen({ route }) {
                         </TouchableOpacity>
                       ))}
                     </View>
+
+                    <Text style={styles.inputLabel}>지출 분류</Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+                      {[
+                        { key: 'shared',    label: '💰 공금' },
+                        { key: 'personal',  label: '👤 개인' },
+                        { key: 'selective', label: '👥 선택' },
+                      ].map(t => {
+                        const active = (form.expenseType || 'shared') === t.key;
+                        return (
+                          <TouchableOpacity
+                            key={t.key}
+                            style={[styles.catChip, { flex: 1, alignItems: 'center' }, active && styles.catChipActive]}
+                            onPress={() => setField('expenseType', t.key)}
+                          >
+                            <Text style={[styles.catChipText, active && styles.catChipTextActive]}>{t.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {/* 선택 결제 시 멤버 선택 안내 — UI는 비용 화면에서 변경 권장 */}
+                    {form.expenseType === 'selective' && (
+                      <View style={{ marginBottom: 10 }}>
+                        <Text style={{ color: '#888', fontSize: 11 }}>
+                          ※ 선택 결제 인원은 비용 탭의 해당 일정 항목에서 편집할 수 있어요.
+                        </Text>
+                      </View>
+                    )}
+
                     <TouchableOpacity
                       style={[styles.prepaidBtn, form.prepaid && styles.prepaidBtnOn]}
                       onPress={() => setField('prepaid', !form.prepaid)}
