@@ -395,6 +395,51 @@ exports.googlePlaceSearch = onCall({ secrets: ['GOOGLE_MAPS_API_KEY'] }, async (
 });
 
 // ──────────────────────────────────────────────
+// Google Directions — 출발지→도착지 이동수단별 소요시간
+// ──────────────────────────────────────────────
+exports.googleDirections = onCall({ secrets: ['GOOGLE_MAPS_API_KEY'] }, async (request) => {
+  const { origin, destination, mode } = request.data;
+  if (!origin || !destination) throw new HttpsError('invalid-argument', '출발지/도착지가 필요합니다.');
+
+  const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+  if (!GOOGLE_MAPS_API_KEY) throw new HttpsError('internal', '서버 설정 오류');
+
+  // 좌표 또는 텍스트 형태 모두 지원: { lat, lng } 객체 또는 string
+  const fmt = (p) => {
+    if (typeof p === 'string') return encodeURIComponent(p);
+    if (p && typeof p === 'object' && p.lat != null && p.lng != null) return `${p.lat},${p.lng}`;
+    return encodeURIComponent(String(p));
+  };
+
+  const travelMode = (mode || 'driving').toLowerCase(); // driving | walking | transit | bicycling
+  try {
+    const url = `https://maps.googleapis.com/maps/api/directions/json`
+      + `?origin=${fmt(origin)}`
+      + `&destination=${fmt(destination)}`
+      + `&mode=${travelMode}`
+      + `&language=ko`
+      + `&key=${GOOGLE_MAPS_API_KEY}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      return { ok: false, status: data.status, durationSec: 0, distanceMeters: 0 };
+    }
+    const leg = data.routes?.[0]?.legs?.[0];
+    return {
+      ok: true,
+      durationSec:    leg?.duration?.value || 0,
+      durationText:   leg?.duration?.text  || '',
+      distanceMeters: leg?.distance?.value || 0,
+      distanceText:   leg?.distance?.text  || '',
+      mode: travelMode,
+    };
+  } catch (e) {
+    console.error('googleDirections error:', e);
+    return { ok: false, status: 'ERROR', durationSec: 0, distanceMeters: 0 };
+  }
+});
+
+// ──────────────────────────────────────────────
 // 이메일 인증 코드 발송 (purpose: 'signup' | 'reset')
 // ──────────────────────────────────────────────
 exports.sendEmailCode = onCall(

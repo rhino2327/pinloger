@@ -685,6 +685,49 @@ export default function ScheduleScreen({ route }) {
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`);
   };
 
+  // 출발지→도착지 구글맵 길찾기 열기
+  const openDirections = (item) => {
+    const o = (item.fromLat && item.fromLng) ? `${item.fromLat},${item.fromLng}` : encodeURIComponent(item.fromLocation || '');
+    const d = (item.toLat && item.toLng)     ? `${item.toLat},${item.toLng}`     : encodeURIComponent(item.toLocation || item.location || '');
+    if (!o || !d) return;
+    // 이동수단 추정: ✈️→ flight(미지원, driving), 🚗 driving, 🚇/🚌→ transit, 🚶→ walking
+    const trans = item.transport || '';
+    let mode = 'driving';
+    if (trans === '🚇' || trans === '🚌' || trans === '🚆') mode = 'transit';
+    else if (trans === '🚶') mode = 'walking';
+    else if (trans === '🚲') mode = 'bicycling';
+    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${o}&destination=${d}&travelmode=${mode}`);
+  };
+
+  // ── 일정별 이동시간 캐시 (출발지→도착지 좌표 동시 있을 때만) ──
+  const [routeInfo, setRouteInfo] = useState({}); // { [scheduleId]: { durationText, distanceText, mode } }
+
+  useEffect(() => {
+    let cancelled = false;
+    const fn = httpsCallable(functions, 'googleDirections');
+    schedules.forEach(s => {
+      if (routeInfo[s.id]) return;
+      if (!s.fromLat || !s.fromLng || !s.toLat || !s.toLng) return;
+      const trans = s.transport || '';
+      let mode = 'driving';
+      if (trans === '🚇' || trans === '🚌' || trans === '🚆') mode = 'transit';
+      else if (trans === '🚶') mode = 'walking';
+      else if (trans === '🚲') mode = 'bicycling';
+      fn({
+        origin:      { lat: s.fromLat, lng: s.fromLng },
+        destination: { lat: s.toLat,   lng: s.toLng },
+        mode,
+      }).then(({ data }) => {
+        if (cancelled || !data?.ok) return;
+        setRouteInfo(prev => ({
+          ...prev,
+          [s.id]: { durationText: data.durationText, distanceText: data.distanceText, mode: data.mode },
+        }));
+      }).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [schedules.map(s => `${s.id}:${s.fromLat},${s.fromLng}-${s.toLat},${s.toLng}-${s.transport}`).join('|')]);
+
   // 다일자 일정은 시작일·종료일·중간일에 모두 표시
   const daySchedules = schedules
     .filter(s => {
@@ -824,6 +867,21 @@ export default function ScheduleScreen({ route }) {
                         {TRANSPORTS.find(t => t.emoji === item.transport)?.label}
                         {item.flightNumber ? `  ${item.flightNumber}` : ''}
                         {item.flightNumber ? '  ›' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* 출발→도착 이동시간 (구글맵 기준) */}
+                  {hasFrom && hasTo && routeInfo[item.id] && (
+                    <TouchableOpacity
+                      style={styles.routeDurationBadge}
+                      onPress={() => openDirections(item)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.routeDurationText}>
+                        🗺 {routeInfo[item.id].durationText}
+                        {routeInfo[item.id].distanceText ? `  ·  ${routeInfo[item.id].distanceText}` : ''}
+                        {'  ›'}
                       </Text>
                     </TouchableOpacity>
                   )}
@@ -1298,6 +1356,13 @@ const styles = StyleSheet.create({
   },
   crossDayTxt:  { color: '#aaa', fontSize: 13, fontWeight: 'bold' },
   crossDayTxtOn:{ color: '#4a9eff' },
+  routeDurationBadge: {
+    backgroundColor: 'rgba(76,217,100,0.15)',
+    borderWidth: 1, borderColor: 'rgba(76,217,100,0.4)',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5,
+    alignSelf: 'flex-start', marginBottom: 6,
+  },
+  routeDurationText: { color: '#4cd964', fontSize: 12, fontWeight: 'bold' },
   transportBadge: {
     backgroundColor: 'rgba(74,158,255,0.15)', borderRadius: 8,
     paddingHorizontal: 8, paddingVertical: 3,

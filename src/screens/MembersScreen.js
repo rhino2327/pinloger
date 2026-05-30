@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  Alert, Share, Modal
+  Alert, Share, Modal, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 
 const ROLE_LABELS = { owner: '🚩 대표', editor: '✏️ 편집자', viewer: '👁 보기만' };
@@ -88,6 +88,56 @@ export default function MembersScreen({ route }) {
 
   const members = tripData.members || [];
 
+  // ── 여행 동선 공유 (구글맵 dir/) ──
+  const shareRoute = async () => {
+    try {
+      const q = query(collection(db, 'schedules'), where('tripId', '==', trip.id));
+      const snap = await getDocs(q);
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 날짜 + 시간 순 정렬
+      all.sort((a, b) => {
+        const ka = `${a.date || ''} ${a.time || ''}`;
+        const kb = `${b.date || ''} ${b.time || ''}`;
+        return ka > kb ? 1 : -1;
+      });
+      // 좌표 또는 텍스트로 waypoint 목록 만들기
+      const points = [];
+      all.forEach(s => {
+        const pushPoint = (label, lat, lng) => {
+          if (lat && lng) points.push(`${lat},${lng}`);
+          else if (label) points.push(encodeURIComponent(label));
+        };
+        if (s.fromLocation || (s.fromLat && s.fromLng)) {
+          pushPoint(s.fromLocation, s.fromLat, s.fromLng);
+        }
+        const toLabel = s.toLocation || s.location;
+        const toLat   = s.toLat || s.lat;
+        const toLng   = s.toLng || s.lng;
+        if (toLabel || (toLat && toLng)) {
+          pushPoint(toLabel, toLat, toLng);
+        }
+      });
+      // 중복 인접 제거
+      const dedup = points.filter((p, i) => p !== points[i - 1]);
+      if (dedup.length < 2) {
+        Alert.alert('동선 없음', '저장된 일정에 출발지/도착지 정보가 부족해요.\n출발지·도착지를 입력한 일정이 2개 이상 필요합니다.');
+        return;
+      }
+      const origin = dedup[0];
+      const destination = dedup[dedup.length - 1];
+      const waypointsArr = dedup.slice(1, -1).slice(0, 9); // 구글맵 dir 웨이포인트 최대 9개
+      const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}`
+        + (waypointsArr.length > 0 ? `&waypoints=${waypointsArr.join('|')}` : '')
+        + `&travelmode=driving`;
+      await Share.share({
+        message: `🗺 ${tripData.name} 여행 동선\n${url}`,
+        url,
+      });
+    } catch (e) {
+      Alert.alert('오류', '동선을 만드는 중 문제가 발생했어요.');
+    }
+  };
+
   return (
     <View style={[styles.container, { paddingBottom: insets.bottom + 20 }]}>
       {/* 초대 코드 카드 */}
@@ -98,6 +148,16 @@ export default function MembersScreen({ route }) {
           <Text style={styles.shareBtnText}>코드 공유하기 📤</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 여행 동선 공유 */}
+      <TouchableOpacity style={styles.routeShareBtn} onPress={shareRoute}>
+        <Text style={styles.routeShareIcon}>🗺</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.routeShareTitle}>여행 동선 공유</Text>
+          <Text style={styles.routeShareHint}>일정의 출발지·도착지를 묶어 구글맵 길찾기로 공유합니다</Text>
+        </View>
+        <Text style={styles.routeShareArrow}>›</Text>
+      </TouchableOpacity>
 
       {/* 공개 설정 */}
       {isOwner && (
@@ -203,6 +263,15 @@ const styles = StyleSheet.create({
   inviteCode: { color: '#fff', fontSize: 32, fontWeight: 'bold', letterSpacing: 6, marginBottom: 14 },
   shareBtn: { backgroundColor: '#e94560', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
   shareBtnText: { color: '#fff', fontWeight: 'bold' },
+  routeShareBtn: {
+    backgroundColor: '#16213e', borderRadius: 12, padding: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginBottom: 16, borderWidth: 1, borderColor: '#0f3460',
+  },
+  routeShareIcon:  { fontSize: 24 },
+  routeShareTitle: { color: '#fff', fontSize: 15, fontWeight: 'bold', marginBottom: 2 },
+  routeShareHint:  { color: '#aaa', fontSize: 12 },
+  routeShareArrow: { color: '#666', fontSize: 22 },
   publicToggle: {
     backgroundColor: '#16213e', borderRadius: 12, padding: 16,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
